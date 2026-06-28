@@ -3,6 +3,7 @@ use std::path::Path;
 pub struct SkillMeta {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub description_zh: Option<String>,
 }
 
 fn read_named_file_exact(dir: &Path, target_name: &str) -> Option<String> {
@@ -41,6 +42,7 @@ fn parse_skill_md_with_candidates(dir: &Path, candidates: &[&str]) -> SkillMeta 
     SkillMeta {
         name: None,
         description: None,
+        description_zh: None,
     }
 }
 
@@ -50,6 +52,7 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
         return SkillMeta {
             name: None,
             description: None,
+            description_zh: None,
         };
     }
 
@@ -65,14 +68,113 @@ fn parse_frontmatter(content: &str) -> SkillMeta {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            return SkillMeta { name, description };
+            let description_zh = [
+                "description_zh",
+                "description_zh_cn",
+                "descriptionZh",
+                "zh_description",
+                "summary_zh",
+            ]
+            .iter()
+            .find_map(|key| yaml.get(*key).and_then(|v| v.as_str()))
+            .map(|s| s.to_string());
+            return SkillMeta {
+                name,
+                description,
+                description_zh,
+            };
         }
     }
 
     SkillMeta {
         name: None,
         description: None,
+        description_zh: None,
     }
+}
+
+pub fn chinese_description_for_skill(
+    name: &str,
+    description: Option<&str>,
+    description_zh: Option<&str>,
+) -> String {
+    if let Some(value) = clean_description(description_zh) {
+        return value;
+    }
+    if let Some(value) = clean_description(description) {
+        if contains_cjk(&value) {
+            return value;
+        }
+        return synthesize_chinese_description(name, &value);
+    }
+    format!("用于 {} 相关工作的 Skill。", humanize_skill_name(name))
+}
+
+fn clean_description(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn contains_cjk(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            '\u{3400}'..='\u{4DBF}'
+                | '\u{4E00}'..='\u{9FFF}'
+                | '\u{F900}'..='\u{FAFF}'
+        )
+    })
+}
+
+fn humanize_skill_name(name: &str) -> String {
+    let value = name
+        .trim()
+        .trim_start_matches("gstack-")
+        .replace(['-', '_'], " ");
+    if value.is_empty() {
+        "该能力".to_string()
+    } else {
+        value
+    }
+}
+
+fn synthesize_chinese_description(name: &str, description: &str) -> String {
+    let lower = format!("{} {}", name, description).to_lowercase();
+    let label = humanize_skill_name(name);
+    let purpose = if contains_any(&lower, &["browser", "browse", "screenshot", "playwright"]) {
+        "浏览器自动化、页面测试和截图检查"
+    } else if contains_any(&lower, &["design", "visual", "ui", "ux", "html", "css"]) {
+        "界面设计、视觉检查和前端实现"
+    } else if contains_any(&lower, &["security", "audit", "owasp", "threat"]) {
+        "安全审计、风险排查和威胁建模"
+    } else if contains_any(&lower, &["deploy", "release", "ship", "canary"]) {
+        "发布、部署和上线验证"
+    } else if contains_any(&lower, &["review", "pr", "diff", "code review"]) {
+        "代码审查、变更检查和质量把关"
+    } else if contains_any(&lower, &["test", "qa", "bug", "debug", "investigate"]) {
+        "测试、问题排查和修复验证"
+    } else if contains_any(&lower, &["performance", "benchmark", "web vitals", "lighthouse"]) {
+        "性能检测、基准测试和回归分析"
+    } else if contains_any(&lower, &["doc", "readme", "documentation", "changelog"]) {
+        "文档整理、发布说明和资料同步"
+    } else if contains_any(&lower, &["github", "git", "repo", "repository"]) {
+        "Git 仓库、版本记录和源码协作"
+    } else if contains_any(&lower, &["image", "photo", "illustration", "raster"]) {
+        "图片生成、图片编辑和视觉素材处理"
+    } else if contains_any(&lower, &["openai", "api", "model", "codex"]) {
+        "OpenAI、Codex 和模型/API 使用"
+    } else if contains_any(&lower, &["plan", "planning", "architecture"]) {
+        "计划拆解、架构评审和执行方案"
+    } else {
+        "相关任务处理、流程指导和上下文管理"
+    };
+    format!("用于 {label}：{purpose}。")
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
 
 /// Skill directory marker files used across the application.
@@ -180,6 +282,31 @@ mod tests {
         let meta = parse_frontmatter(content);
         assert_eq!(meta.name.as_deref(), Some("my-skill"));
         assert_eq!(meta.description.as_deref(), Some("A great skill"));
+        assert_eq!(meta.description_zh, None);
+    }
+
+    #[test]
+    fn parse_frontmatter_description_zh() {
+        let content = "---\nname: my-skill\ndescription: A great skill\ndescription_zh: 一个很好用的技能\n---\n# Content";
+        let meta = parse_frontmatter(content);
+        assert_eq!(meta.description_zh.as_deref(), Some("一个很好用的技能"));
+    }
+
+    #[test]
+    fn chinese_description_prefers_explicit_zh() {
+        let value = chinese_description_for_skill(
+            "web-search",
+            Some("Search the web"),
+            Some("用于网页搜索。"),
+        );
+        assert_eq!(value, "用于网页搜索。");
+    }
+
+    #[test]
+    fn chinese_description_synthesizes_for_english() {
+        let value =
+            chinese_description_for_skill("browse", Some("Browser testing and screenshots"), None);
+        assert!(value.contains("浏览器自动化"));
     }
 
     #[test]

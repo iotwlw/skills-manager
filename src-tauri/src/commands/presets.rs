@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,8 +9,9 @@ use crate::core::{
     error::AppError,
     scenario_service::{self, BatchApplyMode},
     skill_store::{ScenarioRecord, SkillStore},
-    sync_metadata, tool_adapters,
+    sync_metadata,
     timing::should_log_first_or_slow,
+    tool_adapters,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -43,9 +45,7 @@ pub struct PresetDto {
 static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
-pub async fn get_presets(
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<PresetDto>, AppError> {
+pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
@@ -321,6 +321,56 @@ pub async fn remove_skill_from_preset(
 }
 
 #[tauri::command]
+pub async fn batch_set_preset_skills(
+    app: tauri::AppHandle,
+    preset_id: String,
+    skill_ids: Vec<String>,
+    enabled: bool,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<usize, AppError> {
+    let store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if skill_ids.is_empty() {
+            return Ok(0);
+        }
+
+        sync_metadata::with_repo_lock("batch update scenario skills", || {
+            let existing: HashSet<String> = store
+                .get_skill_ids_for_scenario(&preset_id)?
+                .into_iter()
+                .collect();
+            let mut seen = HashSet::new();
+            let mut changed = 0usize;
+
+            for skill_id in skill_ids {
+                if !seen.insert(skill_id.clone()) {
+                    continue;
+                }
+                let already_enabled = existing.contains(&skill_id);
+                if enabled && !already_enabled {
+                    store.add_skill_to_scenario(&preset_id, &skill_id)?;
+                    changed += 1;
+                } else if !enabled && already_enabled {
+                    store.remove_skill_from_scenario(&preset_id, &skill_id)?;
+                    changed += 1;
+                }
+            }
+
+            if changed > 0 {
+                sync_metadata::write_all_from_db_unlocked(&store)?;
+            }
+            Ok(changed)
+        })
+        .map_err(AppError::db)
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
+#[tauri::command]
 pub async fn reorder_presets(
     app: tauri::AppHandle,
     ids: Vec<String>,
@@ -443,15 +493,16 @@ pub async fn apply_preset_to_coding_agents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::core::scenario_service::{
         collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
-    use std::path::PathBuf;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn sample_skill(id: &str, name: &str, central_path: &std::path::Path) -> SkillRecord {

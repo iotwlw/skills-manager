@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -50,6 +51,21 @@ pub struct ProjectAgentTargetDto {
     pub is_custom: bool,
 }
 
+#[derive(Serialize, Clone)]
+pub struct CodexProjectDto {
+    pub name: String,
+    pub path: String,
+    pub imported: bool,
+    pub has_codex_skills: bool,
+    pub skill_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct CodexProjectImportResultDto {
+    pub imported: usize,
+    pub skipped: usize,
+}
+
 fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
     let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for adapter in tool_adapters::all_tool_adapters(store) {
@@ -96,6 +112,138 @@ fn linked_workspace_agent_name(rec: &ProjectRecord) -> String {
     rec.linked_agent_name
         .clone()
         .unwrap_or_else(|| rec.name.clone())
+}
+
+fn codex_project_skill_config() -> project_scanner::AgentSkillConfig {
+    project_scanner::AgentSkillConfig {
+        key: "codex".to_string(),
+        display_name: "Codex".to_string(),
+        relative_skills_dir: ".codex/skills".to_string(),
+    }
+}
+
+fn codex_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".codex").join("config.toml"))
+}
+
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", rest)
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+fn expand_codex_project_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed == "~" {
+        return dirs::home_dir();
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix(r"~\"))
+    {
+        return dirs::home_dir().map(|home| home.join(rest));
+    }
+
+    Some(PathBuf::from(strip_windows_verbatim_prefix(trimmed)))
+}
+
+fn normalize_existing_project_path(path: &Path) -> PathBuf {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    PathBuf::from(strip_windows_verbatim_prefix(&normalized.to_string_lossy()))
+}
+
+fn project_path_identity(path: &Path) -> String {
+    let normalized = normalize_existing_project_path(path)
+        .to_string_lossy()
+        .replace('/', r"\");
+    if cfg!(windows) {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized
+    }
+}
+
+fn is_broad_codex_project_path(path: &Path) -> bool {
+    if path.parent().is_none() {
+        return true;
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        return project_path_identity(path) == project_path_identity(&home);
+    }
+
+    false
+}
+
+fn project_display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn codex_project_paths_from_config(contents: &str) -> Result<Vec<PathBuf>, AppError> {
+    let parsed: toml::Value = contents
+        .parse()
+        .map_err(|err| AppError::invalid_input(format!("Invalid Codex config: {err}")))?;
+    let Some(projects) = parsed.get("projects").and_then(|value| value.as_table()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_path in projects.keys() {
+        let Some(path) = expand_codex_project_path(raw_path) else {
+            continue;
+        };
+        if !path.is_dir() || is_broad_codex_project_path(&path) {
+            continue;
+        }
+
+        let normalized = normalize_existing_project_path(&path);
+        if seen.insert(project_path_identity(&normalized)) {
+            paths.push(normalized);
+        }
+    }
+
+    paths.sort_by(|a, b| {
+        a.to_string_lossy()
+            .to_lowercase()
+            .cmp(&b.to_string_lossy().to_lowercase())
+    });
+    Ok(paths)
+}
+
+fn discover_codex_project_paths() -> Result<Vec<PathBuf>, AppError> {
+    let Some(config_path) = codex_config_path() else {
+        return Ok(Vec::new());
+    };
+    if !config_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let contents = std::fs::read_to_string(config_path)?;
+    codex_project_paths_from_config(&contents)
+}
+
+fn codex_project_dto(path: &Path, imported: bool) -> CodexProjectDto {
+    let config = codex_project_skill_config();
+    let skills = project_scanner::read_project_skills(path, &[config]);
+    CodexProjectDto {
+        name: project_display_name(path),
+        path: path.to_string_lossy().to_string(),
+        imported,
+        has_codex_skills: path.join(".codex").join("skills").is_dir(),
+        skill_count: skills.len(),
+    }
 }
 
 fn read_workspace_skills(
@@ -296,7 +444,7 @@ fn remove_symlink_entry(path: &Path) -> Result<(), AppError> {
     sync_engine::remove_target(path).map_err(AppError::io)
 }
 
-fn set_project_skill_enabled_state(
+pub(crate) fn set_project_skill_enabled_state(
     skills_dir: &Path,
     disabled_dir: &Path,
     skill_relative_path: &str,
@@ -564,6 +712,96 @@ pub async fn add_project(
 }
 
 #[tauri::command]
+pub async fn discover_codex_projects(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<CodexProjectDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let existing = store.get_all_projects().map_err(AppError::db)?;
+        let existing_identities: HashSet<String> = existing
+            .iter()
+            .map(|project| project_path_identity(Path::new(&project.path)))
+            .collect();
+
+        discover_codex_project_paths().map(|paths| {
+            paths
+                .iter()
+                .map(|path| {
+                    let imported = existing_identities.contains(&project_path_identity(path));
+                    codex_project_dto(path, imported)
+                })
+                .collect()
+        })
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn import_codex_projects(
+    store: State<'_, Arc<SkillStore>>,
+    paths: Vec<String>,
+) -> Result<CodexProjectImportResultDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if paths.is_empty() {
+            return Ok(CodexProjectImportResultDto {
+                imported: 0,
+                skipped: 0,
+            });
+        }
+
+        let requested: HashSet<String> = paths
+            .iter()
+            .filter_map(|path| expand_codex_project_path(path))
+            .map(|path| project_path_identity(&path))
+            .collect();
+        let codex_paths = discover_codex_project_paths()?;
+        let mut existing: HashSet<String> = store
+            .get_all_projects()
+            .map_err(AppError::db)?
+            .iter()
+            .map(|project| project_path_identity(Path::new(&project.path)))
+            .collect();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+
+        for path in codex_paths {
+            let identity = project_path_identity(&path);
+            if !requested.contains(&identity) {
+                continue;
+            }
+            if !existing.insert(identity) {
+                skipped += 1;
+                continue;
+            }
+
+            let record = ProjectRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: project_display_name(&path),
+                path: path.to_string_lossy().to_string(),
+                workspace_type: "project".to_string(),
+                linked_agent_key: None,
+                linked_agent_name: None,
+                disabled_path: None,
+                sort_order: 0,
+                created_at: now,
+                updated_at: now,
+            };
+
+            match store.insert_project(&record) {
+                Ok(()) => imported += 1,
+                Err(_) => skipped += 1,
+            }
+        }
+
+        Ok(CodexProjectImportResultDto { imported, skipped })
+    })
+    .await?
+}
+
+#[tauri::command]
 pub async fn add_linked_workspace(
     store: State<'_, Arc<SkillStore>>,
     name: String,
@@ -717,6 +955,10 @@ pub async fn get_project_skills(
                 .as_ref()
                 .and_then(|skill_id| tags_map.get(skill_id).cloned())
                 .unwrap_or_default();
+            if let Some(record) = matched {
+                skill.source_origin =
+                    crate::core::skill_origin::source_origin_for_skill(record, &skill.tags);
+            }
             skill.sync_status = classify_sync_status(skill, matched);
         }
 
@@ -869,6 +1111,7 @@ pub async fn import_project_skill_to_center(
                     .update_skill_source_ref(&existing.id, &skill.path)
                     .map_err(AppError::db)?;
             }
+            super::skills::apply_auto_series_tags_unlocked(&store).map_err(AppError::db)?;
             return Ok(());
         }
 
@@ -901,6 +1144,7 @@ pub async fn import_project_skill_to_center(
         };
 
         store.insert_skill(&skill_record).map_err(AppError::db)?;
+        super::skills::apply_auto_series_tags_unlocked(&store).map_err(AppError::db)?;
 
         Ok(())
     })
@@ -1133,8 +1377,10 @@ pub async fn delete_project_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_sync_status, ensure_distinct_linked_workspace_roots,
-        remove_workspace_skill_target, set_project_skill_enabled_state,
+        classify_sync_status, codex_project_paths_from_config,
+        ensure_distinct_linked_workspace_roots, normalize_existing_project_path,
+        project_path_identity, remove_workspace_skill_target, set_project_skill_enabled_state,
+        strip_windows_verbatim_prefix,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
@@ -1181,6 +1427,9 @@ mod tests {
             dir_name: "example-skill".to_string(),
             relative_path: "example-skill".to_string(),
             description: None,
+            description_zh: "用于 Example Skill 相关工作的 Skill。".to_string(),
+            size_bytes: 0,
+            source_origin: crate::core::skill_origin::local_source_origin("Claude Code", None),
             path,
             files: vec!["SKILL.md".to_string()],
             enabled: true,
@@ -1193,6 +1442,59 @@ mod tests {
             last_modified_at,
             content_hash,
         }
+    }
+
+    #[test]
+    fn codex_project_paths_from_config_reads_existing_project_tables() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("codex-app");
+        fs::create_dir_all(&project).unwrap();
+
+        let config = format!(
+            "[projects.'{}']\ntrust_level = \"trusted\"\n",
+            project.display()
+        );
+        let paths = codex_project_paths_from_config(&config).unwrap();
+
+        assert_eq!(paths, vec![normalize_existing_project_path(&project)]);
+    }
+
+    #[test]
+    fn codex_project_paths_from_config_skips_home_and_missing_paths() {
+        let missing = tempdir().unwrap().path().join("missing");
+        let config = format!(
+            "[projects.'~']\ntrust_level = \"trusted\"\n[projects.'{}']\ntrust_level = \"trusted\"\n",
+            missing.display()
+        );
+
+        let paths = codex_project_paths_from_config(&config).unwrap();
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn project_path_identity_matches_equivalent_existing_paths() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("identity-app");
+        fs::create_dir_all(&project).unwrap();
+        let nested = project.join("..").join("identity-app");
+
+        assert_eq!(
+            project_path_identity(&project),
+            project_path_identity(&nested)
+        );
+    }
+
+    #[test]
+    fn strip_windows_verbatim_prefix_normalizes_display_paths() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\E:\Code\app"),
+            r"E:\Code\app"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\app"),
+            r"\\server\share\app"
+        );
     }
 
     #[test]

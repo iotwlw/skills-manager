@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -26,10 +26,15 @@ import {
   getTagColor,
   UNTAGGED_FILTER,
 } from "../lib/skillTags";
+import {
+  getSkillSearchText,
+  getSkillSourceKey,
+  getSkillSourceLabel,
+  getSkillSourceOptions,
+} from "../lib/skillDisplay";
 import { AgentIcon } from "./AgentIcon";
 import { SkillPickerRow } from "./SkillPickerRow";
 
-const SOURCE_PRIORITY = ["local", "import", "git", "skillssh"];
 const VISIBLE_TARGET_ICON_LIMIT = 5;
 
 export interface GlobalSheetTarget {
@@ -157,23 +162,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [managedSkills]);
 
-  const sourceTypes = useMemo(() => {
-    const present = new Set(managedSkills.map((s) => s.source_type).filter(Boolean));
-    return [
-      ...SOURCE_PRIORITY.filter((s) => present.has(s)),
-      ...Array.from(present).filter((s) => !SOURCE_PRIORITY.includes(s)).sort(),
-    ];
-  }, [managedSkills]);
-
-  const sourceLabel = useCallback(
-    (source: string) => {
-      if (SOURCE_PRIORITY.includes(source)) {
-        return t(`mySkills.sourceFilter.${source}`);
-      }
-      return source;
-    },
-    [t],
-  );
+  const sourceOptions = useMemo(() => getSkillSourceOptions(managedSkills), [managedSkills]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -183,10 +172,10 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       if (q) {
         const matches =
           skill.name.toLowerCase().includes(q) ||
-          (skill.description || "").toLowerCase().includes(q);
+          getSkillSearchText(skill).includes(q);
         if (!matches) return false;
       }
-      if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
+      if (sourceFilters.size > 0 && !sourceFilters.has(getSkillSourceKey(skill))) return false;
       if (tagSelected) {
         const matchUntagged = hasUntagged && skill.tags.length === 0;
         const matchTag = skill.tags.some((tag) => tagFilters.has(tag));
@@ -583,15 +572,15 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
             </div>
           )}
 
-          {sourceTypes.length > 1 && (
+          {sourceOptions.length > 1 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[12px] text-muted">{t("mySkills.sourceType")}</span>
-              {sourceTypes.map((source) => {
-                const active = sourceFilters.has(source);
+              <span className="text-[12px] text-muted">{t("mySkills.sourceOrigin")}</span>
+              {sourceOptions.map((source) => {
+                const active = sourceFilters.has(source.key);
                 return (
                   <button
-                    key={source}
-                    onClick={() => toggleSourceFilter(source)}
+                    key={source.key}
+                    onClick={() => toggleSourceFilter(source.key)}
                     className={cn(
                       "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
                       active
@@ -599,7 +588,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
                         : "bg-surface-hover text-muted hover:text-secondary",
                     )}
                   >
-                    {sourceLabel(source)}
+                    {source.label}
                   </button>
                 );
               })}
@@ -624,7 +613,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
                     skill={skill}
                     status={status}
                     allTags={allTags}
-                    sourceLabel={sourceLabel(skill.source_type)}
+                    sourceLabel={getSkillSourceLabel(skill)}
                     selected={selectedIds.has(skill.id)}
                     onToggle={() => toggleSelect(skill.id)}
                   />

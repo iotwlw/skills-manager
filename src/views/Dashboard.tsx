@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Layers, CheckCircle2, Bot, Plus, Download, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
+import { getSkillSourceLabel } from "../lib/skillDisplay";
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -143,7 +144,7 @@ export function Dashboard() {
                     <h4 className="text-[13px] text-secondary font-medium flex items-center gap-1.5">
                       {skill.name}
                       <span className="text-[9px] px-1.5 py-px rounded bg-surface-hover text-muted border border-border font-normal">
-                        {skill.source_type}
+                        {getSkillSourceLabel(skill)}
                       </span>
                     </h4>
                     <p className="text-[13px] text-muted mt-px">

@@ -4,6 +4,7 @@ import { cn } from "../utils";
 import type { ManagedSkill } from "../lib/tauri";
 import type { PickerStatus } from "../lib/skillPickerStatus";
 import { getTagColor } from "../lib/skillTags";
+import { formatSkillSize, getSkillDescription } from "../lib/skillDisplay";
 
 interface Props {
   skill: ManagedSkill;
@@ -26,6 +27,7 @@ export function SkillPickerRow({
 }: Props) {
   const { t } = useTranslation();
   const selectable = status === "available" && !busy;
+  const displayDescription = getSkillDescription(skill);
 
   const statusLabel: Record<PickerStatus, string> = {
     available: "",
@@ -77,9 +79,10 @@ export function SkillPickerRow({
           <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[11px] font-medium text-muted">
             {sourceLabel}
           </span>
+          <span className="shrink-0 text-[11px] text-faint">{formatSkillSize(skill.size_bytes)}</span>
         </div>
-        {skill.description && (
-          <div className="mt-0.5 truncate text-[12px] text-muted">{skill.description}</div>
+        {displayDescription && (
+          <div className="mt-0.5 truncate text-[12px] text-muted">{displayDescription}</div>
         )}
         {skill.tags.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">

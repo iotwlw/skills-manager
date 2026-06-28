@@ -21,6 +21,9 @@ export interface ManagedSkill {
   id: string;
   name: string;
   description: string | null;
+  description_zh: string;
+  size_bytes: number;
+  source_origin: SkillSourceOrigin;
   source_type: string;
   source_ref: string | null;
   source_ref_resolved: string | null;
@@ -153,6 +156,27 @@ export interface Project {
   updated_at: number;
 }
 
+export interface SkillSourceOrigin {
+  kind: "official" | "gstack" | "repository" | "local" | "unknown" | string;
+  label: string;
+  detail: string | null;
+  repo: string | null;
+  url: string | null;
+}
+
+export interface CodexProjectCandidate {
+  name: string;
+  path: string;
+  imported: boolean;
+  has_codex_skills: boolean;
+  skill_count: number;
+}
+
+export interface CodexProjectImportResult {
+  imported: number;
+  skipped: number;
+}
+
 export interface ProjectAgentTarget {
   key: string;
   display_name: string;
@@ -166,6 +190,9 @@ export interface ProjectSkill {
   dir_name: string;
   relative_path: string;
   description: string | null;
+  description_zh: string;
+  size_bytes: number;
+  source_origin: SkillSourceOrigin;
   path: string;
   files: string[];
   enabled: boolean;
@@ -349,6 +376,14 @@ export const batchImportFolder = (folderPath: string) =>
 
 export const getAllTags = () => invoke<string[]>("get_all_tags");
 
+export interface AutoTagSkillSeriesResult {
+  skills_updated: number;
+  tags_added: number;
+}
+
+export const autoTagSkillSeries = () =>
+  invoke<AutoTagSkillSeriesResult>("auto_tag_skill_series");
+
 export const setSkillTags = (skillId: string, tags: string[]) =>
   invoke<void>("set_skill_tags", { skillId, tags });
 
@@ -384,8 +419,8 @@ export const scanLocalSkills = () => invoke<ScanResult>("scan_local_skills");
 export const importExistingSkill = (sourcePath: string, name?: string) =>
   invoke<void>("import_existing_skill", { sourcePath, name: name || null });
 
-export const importAllDiscovered = () =>
-  invoke<void>("import_all_discovered");
+export const importAllDiscovered = (sourcePaths?: string[]) =>
+  invoke<void>("import_all_discovered", { sourcePaths: sourcePaths ?? null });
 
 // ── Browse ──
 
@@ -589,6 +624,12 @@ export const addSkillToPreset = (skillId: string, presetId: string) =>
 export const removeSkillFromPreset = (skillId: string, presetId: string) =>
   invoke<void>("remove_skill_from_preset", { skillId, presetId });
 
+export const batchSetPresetSkills = (
+  presetId: string,
+  skillIds: string[],
+  enabled: boolean,
+) => invoke<number>("batch_set_preset_skills", { presetId, skillIds, enabled });
+
 export const reorderPresets = (ids: string[]) =>
   invoke<void>("reorder_presets", { ids });
 
@@ -607,6 +648,12 @@ export const getProjects = () => invoke<Project[]>("get_projects");
 
 export const addProject = (path: string) =>
   invoke<Project>("add_project", { path });
+
+export const discoverCodexProjects = () =>
+  invoke<CodexProjectCandidate[]>("discover_codex_projects");
+
+export const importCodexProjects = (paths: string[]) =>
+  invoke<CodexProjectImportResult>("import_codex_projects", { paths });
 
 export const addLinkedWorkspace = (name: string, path: string, disabledPath?: string) =>
   invoke<Project>("add_linked_workspace", {
@@ -664,6 +711,9 @@ export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath:
 
 export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePath: string) =>
   invoke<void>("update_global_local_skill_from_center", { agent, skillRelativePath });
+
+export const toggleGlobalLocalSkill = (agent: string, skillRelativePath: string, enabled: boolean) =>
+  invoke<void>("toggle_global_local_skill", { agent, skillRelativePath, enabled });
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });

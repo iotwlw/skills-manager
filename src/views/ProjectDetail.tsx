@@ -33,14 +33,23 @@ import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import {
+  formatSkillSize,
+  getSkillDescription,
+  getSkillSearchText,
+  getSkillSourceKey,
+  getSkillSourceLabel,
+  getSkillSourceOptions,
+} from "../lib/skillDisplay";
+import { openSkillFolder } from "../lib/openers";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type { ProjectSkill, ManagedSkill, ProjectAgentTarget, SkillSourceOrigin } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 
 const PROJECT_DEFAULT_EXPORT_AGENTS_KEY = "project_default_export_agents";
-const PROJECT_EXPORT_AGENT_PRIORITY = ["claude_code", "codex", "cursor", "gemini_cli", "github_copilot"];
+const PROJECT_EXPORT_AGENT_PRIORITY = ["codex", "claude_code", "cursor", "gemini_cli", "github_copilot"];
 
 const projectLastUsedAgentsKey = (projectId: string) =>
   `project_last_used_export_agents:${projectId}`;
@@ -51,6 +60,9 @@ interface ProjectSkillGroup {
   dir_name: string;
   relative_path: string;
   description: string | null;
+  description_zh: string;
+  size_bytes: number;
+  source_origin: SkillSourceOrigin;
   files: string[];
   variants: ProjectSkill[];
   enabledCount: number;
@@ -165,6 +177,7 @@ export function ProjectDetail() {
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
+  const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
   const [detailSkill, setDetailSkill] = useState<ProjectSkillGroup | null>(null);
   const [docContent, setDocContent] = useState<string | null>(null);
   const [docLoading, setDocLoading] = useState(false);
@@ -262,6 +275,13 @@ export function ProjectDetail() {
         if (!existing.description && skill.description) {
           existing.description = skill.description;
         }
+        if (!existing.description_zh && skill.description_zh) {
+          existing.description_zh = skill.description_zh;
+        }
+        if (existing.source_origin.kind === "local" && skill.source_origin.kind !== "local") {
+          existing.source_origin = skill.source_origin;
+        }
+        existing.size_bytes += skill.size_bytes;
         continue;
       }
       groups.set(key, {
@@ -270,6 +290,9 @@ export function ProjectDetail() {
         dir_name: skill.dir_name,
         relative_path: skill.relative_path,
         description: skill.description,
+        description_zh: skill.description_zh,
+        size_bytes: skill.size_bytes,
+        source_origin: skill.source_origin,
         files: [...skill.files],
         variants: [skill],
         enabledCount: skill.enabled ? 1 : 0,
@@ -307,8 +330,9 @@ export function ProjectDetail() {
     return groupedSkills.filter((skill) => {
       const matchesSearch =
         skill.name.toLowerCase().includes(search.toLowerCase()) ||
-        (skill.description || "").toLowerCase().includes(search.toLowerCase());
+        getSkillSearchText(skill).includes(search.toLowerCase());
       if (!matchesSearch) return false;
+      if (sourceFilters.size > 0 && !sourceFilters.has(getSkillSourceKey(skill))) return false;
       if (tagFilters.size > 0) {
         const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
         const matchUntagged = wantUntagged && skill.tags.length === 0;
@@ -319,7 +343,7 @@ export function ProjectDetail() {
       if (filterMode === "disabled") return skill.enabledCount === 0;
       return true;
     });
-  }, [groupedSkills, search, filterMode, tagFilters]);
+  }, [groupedSkills, search, filterMode, tagFilters, sourceFilters]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -447,6 +471,7 @@ export function ProjectDetail() {
   }, [exportTargets, selectedExportAgents]);
 
   const enabledCount = groupedSkills.filter((s) => s.enabledCount > 0).length;
+  const sourceOptions = useMemo(() => getSkillSourceOptions(groupedSkills), [groupedSkills]);
   const allTags = useMemo(() => {
     const tags = new Set<string>();
     for (const skill of groupedSkills) {
@@ -926,6 +951,36 @@ export function ProjectDetail() {
           </div>
         </div>
 
+        {sourceOptions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[12px] text-muted">{t("mySkills.sourceOrigin")}</span>
+            {sourceOptions.map((source) => {
+              const active = sourceFilters.has(source.key);
+              return (
+                <button
+                  key={source.key}
+                  onClick={() => {
+                    setSourceFilters((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(source.key)) next.delete(source.key);
+                      else next.add(source.key);
+                      return next;
+                    });
+                  }}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    active
+                      ? "bg-accent text-white dark:bg-accent dark:text-white"
+                      : "bg-surface-hover text-muted hover:text-secondary"
+                  )}
+                >
+                  {source.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {allTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
@@ -1088,6 +1143,9 @@ export function ProjectDetail() {
               skill.status === "diverged";
             const statusMeta = getSyncStatusMeta(t, skill.status);
             const assignedAgents = getAssignedAgents(skill.variants);
+            const displayDescription = getSkillDescription(skill);
+            const sizeLabel = formatSkillSize(skill.size_bytes);
+            const sourceLabel = getSkillSourceLabel(skill);
 
             if (viewMode === "grid") {
               return (
@@ -1125,7 +1183,7 @@ export function ProjectDetail() {
 
                   <div className="px-3.5 pb-3">
                     <p className="text-[13px] leading-[18px] text-muted truncate">
-                      {skill.description || "\u2014"}
+                      {displayDescription || "\u2014"}
                     </p>
                     {skill.tags.length > 0 && (
                       <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -1154,6 +1212,8 @@ export function ProjectDetail() {
                           {t("project.disabled")}
                         </span>
                       )}
+                      <span className="truncate text-[12px] text-faint">{sourceLabel}</span>
+                      <span className="text-[12px] text-faint">{sizeLabel}</span>
                     </div>
                     {!isMultiSelect && (
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -1166,9 +1226,16 @@ export function ProjectDetail() {
                           pendingKey={
                             togglingAgentTarget?.skillKey === skillKey
                               ? togglingAgentTarget.agent
-                              : null
+                            : null
                           }
                         />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void openSkillFolder(skill.primaryVariant.path, t("common.error")); }}
+                          className="rounded px-2 py-1 text-[13px] font-medium text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary"
+                          title={t("common.openFolder")}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        </button>
                         {canUpdateCenter && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleUpdateCenter(skill); }}
@@ -1264,7 +1331,7 @@ export function ProjectDetail() {
                 </h3>
 
                 <p className="min-w-0 flex-1 truncate text-[13px] text-muted">
-                  {skill.description || "\u2014"}
+                  {displayDescription || "\u2014"}
                 </p>
 
                 {skill.tags.length > 0 && (
@@ -1298,6 +1365,8 @@ export function ProjectDetail() {
                       {skill.files.length}
                     </span>
                   )}
+                  <span className="text-[12px] text-faint">{sizeLabel}</span>
+                  <span className="text-[12px] text-faint">{sourceLabel}</span>
                   <ProjectAgentDots
                     assignedAgents={assignedAgents}
                     targets={exportTargets}
@@ -1319,6 +1388,13 @@ export function ProjectDetail() {
                 {!isMultiSelect && (
                   <>
                     <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void openSkillFolder(skill.primaryVariant.path, t("common.error")); }}
+                        className="rounded p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                        title={t("common.openFolder")}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                      </button>
                       {canUpdateCenter && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleUpdateCenter(skill); }}
@@ -1484,6 +1560,8 @@ function ProjectSkillDetailPanel({
   const { t } = useTranslation();
   const [contentTab, setContentTab] = useState<"local" | "diff" | "center">("local");
   const supportsCenterDiff = skill.centerSkillIds.length > 0;
+  const displayDescription = getSkillDescription(skill);
+  const sourceLabel = getSkillSourceLabel(skill);
   const toggleItems: AgentToggleItem[] = targets.map((target) => {
     const variant = skill.variants.find((item) => item.agent === target.key);
     return {
@@ -1527,11 +1605,22 @@ function ProjectSkillDetailPanel({
             ))}
           </>
         )}
+        <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-muted">
+          {sourceLabel}
+        </span>
       </div>
       <div className="mt-3 flex items-center gap-4 text-[12.5px] text-muted">
         <div className="flex min-w-0 items-center gap-1.5">
           <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate">{skill.primaryVariant.path}</span>
+          <span className="font-mono truncate" title={skill.primaryVariant.path}>{skill.primaryVariant.path}</span>
+          <button
+            type="button"
+            onClick={() => void openSkillFolder(skill.primaryVariant.path, t("common.error"))}
+            className="shrink-0 rounded p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+            title={t("common.openFolder")}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </button>
         </div>
         {skill.files.length > 0 && (
           <div className="flex shrink-0 items-center gap-1.5">
@@ -1539,6 +1628,9 @@ function ProjectSkillDetailPanel({
             {skill.files.join(", ")}
           </div>
         )}
+        <span className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-muted">
+          {formatSkillSize(skill.size_bytes)}
+        </span>
       </div>
     </>
   );
@@ -1547,7 +1639,7 @@ function ProjectSkillDetailPanel({
     <DetailSheet
       open={true}
       title={skill.name}
-      description={skill.description ? <p className="line-clamp-3">{skill.description}</p> : undefined}
+      description={displayDescription ? <p className="line-clamp-3">{displayDescription}</p> : undefined}
       meta={meta}
       onClose={onClose}
     >

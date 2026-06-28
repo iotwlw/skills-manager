@@ -5,12 +5,12 @@ use tauri::State;
 
 use crate::commands::projects::{
     classify_sync_status, ensure_dir_within_root, ensure_safe_skill_relative_path,
-    source_ref_matches_skill_path, ProjectSkillDocumentDto,
+    set_project_skill_enabled_state, source_ref_matches_skill_path, ProjectSkillDocumentDto,
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
-    error::AppError, installer, project_scanner, scenario_service, sync_engine, tool_adapters,
-    tool_service,
+    error::AppError, installer, project_scanner, scenario_service, skill_origin, sync_engine,
+    tool_adapters, tool_service,
 };
 
 fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
@@ -39,13 +39,24 @@ fn adapter_for_agent(
 fn read_agent_local_skills(
     adapter: &tool_adapters::ToolAdapter,
 ) -> Vec<project_scanner::ProjectSkillInfo> {
+    let disabled_root = agent_disabled_skills_dir(adapter);
     project_scanner::read_linked_workspace_skills(
         &adapter.skills_dir(),
-        None,
+        Some(&disabled_root),
         &adapter.key,
         &adapter.display_name,
         adapter.recursive_scan,
     )
+}
+
+fn agent_disabled_skills_dir(adapter: &tool_adapters::ToolAdapter) -> PathBuf {
+    let mut disabled_root = adapter.skills_dir();
+    if let Some(name) = disabled_root.file_name().and_then(|name| name.to_str()) {
+        disabled_root.set_file_name(format!("{name}-disabled"));
+    } else {
+        disabled_root.push("skills-disabled");
+    }
+    disabled_root
 }
 
 fn enrich_center_status(
@@ -63,6 +74,9 @@ fn enrich_center_status(
             .as_ref()
             .and_then(|skill_id| tags_map.get(skill_id).cloned())
             .unwrap_or_default();
+        if let Some(record) = matched {
+            skill.source_origin = skill_origin::source_origin_for_skill(record, &skill.tags);
+        }
         skill.sync_status = classify_sync_status(skill, matched);
     }
     skills
@@ -171,11 +185,17 @@ pub async fn get_global_local_skill_document(
         let adapter = adapter_for_agent(&store, &agent)?;
         ensure_safe_skill_relative_path(&skill_relative_path)?;
 
+        let skill = find_agent_skill(&adapter, &skill_relative_path)?;
         let skills_root = adapter.skills_dir();
-        let skill_dir = skills_root.join(&skill_relative_path);
-        ensure_agent_skill_path(&skill_dir, &skills_root)?;
+        let disabled_root = agent_disabled_skills_dir(&adapter);
+        let skill_dir = PathBuf::from(&skill.path);
+        if skill.enabled {
+            ensure_agent_skill_path(&skill_dir, &skills_root)?;
+        } else {
+            ensure_agent_skill_path(&skill_dir, &disabled_root)?;
+        }
 
-        let allowed_roots = vec![skills_root];
+        let allowed_roots = vec![skills_root, disabled_root];
         let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
         for candidate in &candidates {
             let file_path = skill_dir.join(candidate);
@@ -271,6 +291,7 @@ fn import_agent_local_skill_to_center(
                 .update_skill_source_ref(&existing.id, &skill.path)
                 .map_err(AppError::db)?;
         }
+        super::skills::apply_auto_series_tags_unlocked(store).map_err(AppError::db)?;
 
         // Register this agent as a managed sync target so the adopted skill is
         // recognized as managed (gives it a delete button). Reusing the regular
@@ -308,6 +329,7 @@ fn import_agent_local_skill_to_center(
     };
 
     store.insert_skill(&skill_record).map_err(AppError::db)?;
+    super::skills::apply_auto_series_tags_unlocked(store).map_err(AppError::db)?;
     // Register the managed sync target (see note above). On failure, drop the
     // just-inserted skill row (which cascades to any target) so we never leave
     // an orphaned, button-less skill behind. We deliberately do NOT delete the
@@ -363,10 +385,9 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
 
         for skill in read_agent_local_skills(&adapter) {
             let canonical = std::fs::canonicalize(&skill.path).ok();
-            let Some(matched) = all_managed
-                .iter()
-                .find(|managed| source_ref_matches_skill_path(&skill.path, canonical.as_ref(), managed))
-            else {
+            let Some(matched) = all_managed.iter().find(|managed| {
+                source_ref_matches_skill_path(&skill.path, canonical.as_ref(), managed)
+            }) else {
                 continue;
             };
 
@@ -429,6 +450,32 @@ pub async fn update_global_local_skill_from_center(
     .await?
 }
 
+#[tauri::command]
+pub async fn toggle_global_local_skill(
+    store: State<'_, Arc<SkillStore>>,
+    agent: String,
+    skill_relative_path: String,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        toggle_agent_local_skill(&store, &agent, &skill_relative_path, enabled)
+    })
+    .await?
+}
+
+fn toggle_agent_local_skill(
+    store: &SkillStore,
+    agent: &str,
+    skill_relative_path: &str,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let adapter = adapter_for_agent(store, agent)?;
+    let skills_root = adapter.skills_dir();
+    let disabled_root = agent_disabled_skills_dir(&adapter);
+    set_project_skill_enabled_state(&skills_root, &disabled_root, skill_relative_path, enabled)
+}
+
 fn update_agent_local_skill_from_center(
     store: &SkillStore,
     agent: &str,
@@ -449,6 +496,11 @@ fn update_agent_local_skill_from_center(
 
     let skills_root = adapter.skills_dir();
     let target_path = PathBuf::from(&skill.path);
+    if !skill.enabled {
+        return Err(AppError::invalid_input(
+            "Enable the skill before updating it from the Skills Center",
+        ));
+    }
     ensure_agent_skill_path(&target_path, &skills_root)?;
 
     let source = PathBuf::from(&managed.central_path);
@@ -481,9 +533,9 @@ fn delete_agent_local_skill(
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
     if let Some(managed) = find_verified_center_match(&skill, &all_managed, &all_targets) {
-        let still_linked = all_targets
-            .iter()
-            .any(|t| t.skill_id == managed.id && target_path_equals_skill(&t.target_path, &skill.path));
+        let still_linked = all_targets.iter().any(|t| {
+            t.skill_id == managed.id && target_path_equals_skill(&t.target_path, &skill.path)
+        });
         if still_linked {
             return Err(AppError::invalid_input(
                 "Skill is managed by Skills Center — remove from the agent first.",
@@ -492,8 +544,13 @@ fn delete_agent_local_skill(
     }
 
     let skills_root = adapter.skills_dir();
+    let disabled_root = agent_disabled_skills_dir(&adapter);
     let target_path = PathBuf::from(&skill.path);
-    ensure_agent_skill_path(&target_path, &skills_root)?;
+    if skill.enabled {
+        ensure_agent_skill_path(&target_path, &skills_root)?;
+    } else {
+        ensure_agent_skill_path(&target_path, &disabled_root)?;
+    }
     sync_engine::remove_target(&target_path).map_err(AppError::io)?;
     Ok(())
 }
@@ -501,8 +558,8 @@ fn delete_agent_local_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        backfill_stranded_agent_targets, enrich_center_status,
-        import_agent_local_skill_to_center, update_agent_local_skill_from_center,
+        backfill_stranded_agent_targets, enrich_center_status, import_agent_local_skill_to_center,
+        update_agent_local_skill_from_center,
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
@@ -596,6 +653,9 @@ mod tests {
             dir_name: "local-tool".to_string(),
             relative_path: "local-tool".to_string(),
             description: Some("Agent copy".to_string()),
+            description_zh: "用于 local tool：相关任务处理、流程指导和上下文管理。".to_string(),
+            size_bytes: 0,
+            source_origin: crate::core::skill_origin::local_source_origin("Test Agent", None),
             path: "/tmp/agent-skills/local-tool".to_string(),
             files: vec![],
             enabled: true,

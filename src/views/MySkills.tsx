@@ -23,6 +23,7 @@ import {
   CircleSlash,
   Pencil,
   Trash2,
+  FolderOpen,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -41,6 +42,15 @@ import { GitRecoveryDialog } from "../components/GitRecoveryDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import {
+  formatSkillSize,
+  getSkillDescription,
+  getSkillSearchText,
+  getSkillSourceKey,
+  getSkillSourceLabel,
+  getSkillSourceOptions,
+} from "../lib/skillDisplay";
+import { openSkillFolder } from "../lib/openers";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -158,9 +168,11 @@ export function MySkills() {
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
+  const [autoTaggingSeries, setAutoTaggingSeries] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  const [batchTogglingPreset, setBatchTogglingPreset] = useState(false);
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
@@ -210,6 +222,29 @@ export function MySkills() {
     refreshAllTags();
   }, [skills]);
 
+  const handleAutoTagSkillSeries = async () => {
+    if (autoTaggingSeries) return;
+    setAutoTaggingSeries(true);
+    try {
+      const result = await api.autoTagSkillSeries();
+      await Promise.all([refreshManagedSkills(), refreshAllTags()]);
+      if (result.tags_added > 0) {
+        toast.success(
+          t("mySkills.tags.autoSeriesSuccess", {
+            skills: result.skills_updated,
+            tags: result.tags_added,
+          })
+        );
+      } else {
+        toast.success(t("mySkills.tags.autoSeriesNoop"));
+      }
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setAutoTaggingSeries(false);
+    }
+  };
+
   // Close the tag context menu on Escape (click-outside is handled by its backdrop).
   useEffect(() => {
     if (!tagMenu) return;
@@ -226,6 +261,8 @@ export function MySkills() {
     else next.add(value);
     return next;
   };
+
+  const sourceOptions = useMemo(() => getSkillSourceOptions(skills), [skills]);
 
   const skillDisplayNames = useMemo(() => {
     const nameCounts = new Map<string, number>();
@@ -252,10 +289,10 @@ export function MySkills() {
       const matchesSearch =
         skill.name.toLowerCase().includes(search.toLowerCase()) ||
         displayName.toLowerCase().includes(search.toLowerCase()) ||
-        (skill.description || "").toLowerCase().includes(search.toLowerCase());
+        getSkillSearchText(skill).includes(search.toLowerCase());
       if (!matchesSearch) return false;
 
-      if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
+      if (sourceFilters.size > 0 && !sourceFilters.has(getSkillSourceKey(skill))) return false;
 
       if (tagFilters.size > 0) {
         const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
@@ -688,32 +725,28 @@ export function MySkills() {
     if (!viewedPreset) return;
     const selectedSkillsList = skills.filter((s) => selectedIds.has(s.id));
     const enabling = anyDisabled;
-    let count = 0;
-    let failed = 0;
-    for (const skill of selectedSkillsList) {
-      try {
+    const ids = selectedSkillsList
+      .filter((skill) => {
         const enabledInPreset = skill.preset_ids.includes(viewedPreset.id);
-        if (enabling && !enabledInPreset) {
-          await api.addSkillToPreset(skill.id, viewedPreset.id);
-          count++;
-        } else if (!enabling && enabledInPreset) {
-          await api.removeSkillFromPreset(skill.id, viewedPreset.id);
-          count++;
-        }
-      } catch {
-        failed++;
-        // continue with remaining
+        return enabling ? !enabledInPreset : enabledInPreset;
+      })
+      .map((skill) => skill.id);
+    if (ids.length === 0) return;
+
+    setBatchTogglingPreset(true);
+    try {
+      const count = await api.batchSetPresetSkills(viewedPreset.id, ids, enabling);
+      if (count > 0) {
+        toast.success(enabling
+          ? t("mySkills.batchAddedToPreset", { count })
+          : t("mySkills.batchRemovedFromPreset", { count }));
       }
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      await Promise.all([refreshManagedSkills(), refreshPresets()]);
+      setBatchTogglingPreset(false);
     }
-    if (count > 0) {
-      toast.success(enabling
-        ? t("mySkills.batchEnabled", { count })
-        : t("mySkills.batchDisabled", { count }));
-    }
-    if (failed > 0) {
-      toast.error(t("mySkills.batchToggleFailed", { count: failed }));
-    }
-    await Promise.all([refreshManagedSkills(), refreshPresets()]);
   };
 
   const handleBatchRefresh = async () => {
@@ -826,6 +859,10 @@ export function MySkills() {
     } finally {
       setUpdatingSkillId(null);
     }
+  };
+
+  const handleOpenSkillFolder = (skill: ManagedSkill) => {
+    void openSkillFolder(skill.central_path, t("common.error"));
   };
 
   const handleRelinkSource = async (skill: ManagedSkill) => {
@@ -1201,9 +1238,6 @@ export function MySkills() {
     [skills, selectedIds]
   );
 
-  const sourceTypeLabel = (skill: ManagedSkill) =>
-    skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
-
   const formatGitDateTime = (iso: string) => {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -1398,6 +1432,15 @@ export function MySkills() {
             {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
           </button>
           <button
+            onClick={handleAutoTagSkillSeries}
+            disabled={autoTaggingSeries}
+            title={t("mySkills.tags.autoSeriesHint")}
+            className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+          >
+            <Layers className={cn("h-3.5 w-3.5", autoTaggingSeries && "animate-pulse")} />
+            {t("mySkills.tags.autoSeries")}
+          </button>
+          <button
             onClick={() => setViewMode("grid")}
             className={cn(
               "rounded-md p-2 transition-colors outline-none",
@@ -1429,23 +1472,28 @@ export function MySkills() {
       </div>
 
       <div className="flex flex-wrap items-center gap-1 px-1 -mt-2 -mb-3">
-        {(["local", "import", "git", "skillssh"] as const).map((src) => (
-          <button
-            key={src}
-            onClick={() => setSourceFilters(toggleFilter(sourceFilters, src))}
-            className={cn(
-              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-              sourceFilters.has(src)
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            {t(`mySkills.sourceFilter.${src}`)}
-          </button>
-        ))}
+        {sourceOptions.length > 0 && (
+          <>
+            <span className="text-[12px] text-muted">{t("mySkills.sourceOrigin")}</span>
+            {sourceOptions.map((source) => (
+              <button
+                key={source.key}
+                onClick={() => setSourceFilters(toggleFilter(sourceFilters, source.key))}
+                className={cn(
+                  "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                  sourceFilters.has(source.key)
+                    ? "bg-accent text-white dark:bg-accent dark:text-white"
+                    : "bg-surface-hover text-muted hover:text-secondary"
+                )}
+              >
+                {source.label}
+              </button>
+            ))}
+          </>
+        )}
         {allTags.length > 0 && (
           <>
-            <span className="mx-0.5 h-3 w-px bg-border-subtle" />
+            {sourceOptions.length > 0 && <span className="mx-0.5 h-3 w-px bg-border-subtle" />}
             {skills.some((s) => s.tags.length === 0) && (() => {
               const isActive = tagFilters.has(UNTAGGED_FILTER);
               return (
@@ -1500,13 +1548,18 @@ export function MySkills() {
           anyUpdatable={anyRefreshableSelected}
           showToggle={!!viewedPreset}
           updating={batchUpdating}
+          toggling={batchTogglingPreset}
           labels={{
             hint: t("mySkills.selectHint"),
             selected: t("mySkills.selectedCount", { count: selectedIds.size }),
             update: t("mySkills.batchUpdate", { count: refreshableSelectedCount }),
             delete: t("mySkills.deleteSelected", { count: selectedIds.size }),
-            enable: t("mySkills.batchEnable", { count: selectedIds.size }),
-            disable: t("mySkills.batchDisable", { count: selectedIds.size }),
+            enable: viewedPreset
+              ? t("mySkills.batchAddToPreset", { count: selectedIds.size })
+              : t("mySkills.batchEnable", { count: selectedIds.size }),
+            disable: viewedPreset
+              ? t("mySkills.batchRemoveFromPreset", { count: selectedIds.size })
+              : t("mySkills.batchDisable", { count: selectedIds.size }),
             selectAll: t("mySkills.selectAll"),
             deselectAll: t("mySkills.deselectAll"),
             cancel: t("common.cancel"),
@@ -1604,6 +1657,9 @@ export function MySkills() {
               skill.update_status === "source_missing"
               && (skill.source_type === "local" || skill.source_type === "import");
             const displayName = skillDisplayNames.get(skill.id) || skill.name;
+            const displayDescription = getSkillDescription(skill);
+            const sizeLabel = formatSkillSize(skill.size_bytes);
+            const sourceLabel = getSkillSourceLabel(skill);
 
             if (viewMode === "grid") {
               return (
@@ -1672,7 +1728,7 @@ export function MySkills() {
 
                   <div className="px-3.5 pb-3">
                     <p className="text-[13px] leading-[18px] text-muted truncate">
-                      {skill.description || "—"}
+                      {displayDescription || "—"}
                     </p>
                     {badge && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -1778,8 +1834,10 @@ export function MySkills() {
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className="inline-flex shrink-0 items-center gap-1 text-[13px] text-muted">
                         {sourceIcon(skill.source_type)}
-                        {sourceTypeLabel(skill)}
+                        {sourceLabel}
                       </span>
+                      <span className="text-faint">·</span>
+                      <span className="text-[13px] text-faint">{sizeLabel}</span>
                       {enabledInPreset && (
                         <>
                           <span className="text-faint">·</span>
@@ -1790,6 +1848,15 @@ export function MySkills() {
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                      {!isMultiSelect && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleOpenSkillFolder(skill); }}
+                          className="rounded p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                          title={t("common.openFolder")}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       <SyncDots
                         skill={skill}
                         tools={tools}
@@ -1854,7 +1921,7 @@ export function MySkills() {
                 </h3>
 
                 <p className="min-w-0 flex-1 truncate text-[13px] text-muted">
-                  {skill.description || "—"}
+                  {displayDescription || "—"}
                 </p>
 
                 <div className="flex shrink-0 items-center gap-1.5">
@@ -1896,8 +1963,9 @@ export function MySkills() {
                   />
                   <span className="inline-flex items-center gap-1 text-[13px] text-muted">
                     {sourceIcon(skill.source_type)}
-                    {sourceTypeLabel(skill)}
+                    {sourceLabel}
                   </span>
+                  <span className="text-[12px] text-faint">{sizeLabel}</span>
                   {enabledInPreset && (
                     <span className="text-[13px] font-medium text-amber-600 dark:text-amber-400/80">
                       {viewedPresetName}
@@ -1906,6 +1974,13 @@ export function MySkills() {
                 </div>
 
                 <div className={cn("flex shrink-0 items-center gap-1 opacity-0 transition-opacity", !isMultiSelect && "group-hover:opacity-100")}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleOpenSkillFolder(skill); }}
+                    className="rounded p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                    title={t("common.openFolder")}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
                   {isMissingLocalSource && (
                     <>
                       <button

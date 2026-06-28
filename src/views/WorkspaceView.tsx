@@ -8,12 +8,15 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  Power,
+  PowerOff,
   Plus,
   RefreshCw,
   Search,
   CircleSlash,
   Trash2,
   Upload,
+  FolderOpen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -29,6 +32,15 @@ import * as api from "../lib/tauri";
 import type { ManagedSkill, ProjectSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import {
+  formatSkillSize,
+  getSkillDescription,
+  getSkillSearchText,
+  getSkillSourceKey,
+  getSkillSourceLabel,
+  getSkillSourceOptions,
+} from "../lib/skillDisplay";
+import { openSkillFolder } from "../lib/openers";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
 import type { WorkspaceConfig } from "./workspaceConfigs";
 
@@ -53,6 +65,8 @@ function WorkspaceSkillCard({
   tags = [],
   status,
   fileCount = 0,
+  sizeLabel,
+  sourceLabel,
   active = false,
   actions,
   actionsHover = false,
@@ -64,6 +78,8 @@ function WorkspaceSkillCard({
   tags?: WorkspaceSkillCardTag[];
   status: WorkspaceSkillCardStatus;
   fileCount?: number;
+  sizeLabel?: string;
+  sourceLabel?: string;
   active?: boolean;
   actions?: ReactNode;
   actionsHover?: boolean;
@@ -112,6 +128,8 @@ function WorkspaceSkillCard({
               {fileCount}
             </span>
           )}
+          {sizeLabel && <span className="text-[12px] text-faint">{sizeLabel}</span>}
+          {sourceLabel && <span className="text-[12px] text-faint">{sourceLabel}</span>}
         </div>
         {actions && (
           <div
@@ -148,6 +166,8 @@ function WorkspaceSkillCard({
             {fileCount}
           </span>
         )}
+        {sizeLabel && <span className="shrink-0 text-[12px] text-faint">{sizeLabel}</span>}
+        {sourceLabel && <span className="shrink-0 text-[12px] text-faint">{sourceLabel}</span>}
       </div>
       <div className="px-3.5 pb-3">
         <p className="truncate text-[13px] leading-[18px] text-muted">
@@ -218,11 +238,13 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
+  const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [removingLocalSkillId, setRemovingLocalSkillId] = useState<string | null>(null);
   const [localSkills, setLocalSkills] = useState<ProjectSkill[]>([]);
   const [localSkillsLoading, setLocalSkillsLoading] = useState(false);
   const [localActionKey, setLocalActionKey] = useState<string | null>(null);
+  const [localToggleKey, setLocalToggleKey] = useState<string | null>(null);
   const [localDetailSkill, setLocalDetailSkill] = useState<ProjectSkill | null>(null);
   const [localDocContent, setLocalDocContent] = useState<string | null>(null);
   const [localCenterDocContent, setLocalCenterDocContent] = useState<string | null>(null);
@@ -325,7 +347,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     setUploadConfirmSkill(null);
     setPullConfirmSkill(null);
     setDeleteLocalConfirmSkill(null);
+    setLocalToggleKey(null);
     setTagFilters(new Set());
+    setSourceFilters(new Set());
   }, [currentTool?.key]);
 
   const agentSkills = useMemo(
@@ -348,6 +372,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [localSkills]);
 
+  const sourceOptions = useMemo(() => getSkillSourceOptions(localSkills), [localSkills]);
+
   const visibleLocalSkills = useMemo(() => {
     const q = search.trim().toLowerCase();
     return localSkills
@@ -356,7 +382,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           const matchesQuery =
             skill.name.toLowerCase().includes(q) ||
             skill.dir_name.toLowerCase().includes(q) ||
-            (skill.description || "").toLowerCase().includes(q);
+            getSkillSearchText(skill).includes(q);
           if (!matchesQuery) return false;
         }
         if (tagFilters.size > 0) {
@@ -365,6 +391,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           const matchTag = skill.tags.some((tag) => tagFilters.has(tag));
           if (!matchUntagged && !matchTag) return false;
         }
+        if (sourceFilters.size > 0 && !sourceFilters.has(getSkillSourceKey(skill))) return false;
         return true;
       })
       .sort((a, b) => {
@@ -380,7 +407,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           a.name.localeCompare(b.name)
         );
       });
-  }, [localSkills, search, tagFilters]);
+  }, [localSkills, search, tagFilters, sourceFilters]);
 
   const inSyncLocalCount = useMemo(
     () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
@@ -455,6 +482,31 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       } finally {
         setLocalActionKey(null);
         setDeleteLocalConfirmSkill(null);
+      }
+    },
+    [currentTool, loadLocalSkills, t]
+  );
+
+  const handleToggleLocalSkill = useCallback(
+    async (skill: ProjectSkill, enabled: boolean) => {
+      if (!currentTool) return;
+      const key = `toggle:${skill.relative_path}`;
+      setLocalToggleKey(key);
+      try {
+        await api.toggleGlobalLocalSkill(currentTool.key, skill.relative_path, enabled);
+        toast.success(
+          t(
+            enabled
+              ? "globalWorkspace.localSkills.enabledToast"
+              : "globalWorkspace.localSkills.disabledToast",
+            { name: skill.name, agent: currentTool.display_name }
+          )
+        );
+        await loadLocalSkills();
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, t("common.error")));
+      } finally {
+        setLocalToggleKey(null);
       }
     },
     [currentTool, loadLocalSkills, t]
@@ -542,20 +594,53 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     const uploadKey = `upload:${skill.relative_path}`;
     const pullKey = `pull:${skill.relative_path}`;
     const deleteKey = `delete:${skill.relative_path}`;
+    const toggleKey = `toggle:${skill.relative_path}`;
     const canPull = skill.sync_status === "center_newer" || skill.sync_status === "diverged";
     const isInSync = skill.sync_status === "in_sync";
     const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
     const canDeleteLocal = !isManaged && skill.sync_status === "project_only";
     const removing = removingLocalSkillId === skill.relative_path;
+    const toggling = localToggleKey === toggleKey;
     const buttonClassName = variant === "grid"
       ? "rounded px-2 py-1 text-[13px] font-medium text-muted transition-colors outline-none hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
       : "rounded p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50";
 
-    if (isInSync && !isManaged) return null;
-
     return (
       <>
-        {!isInSync && canPull && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            void openSkillFolder(skill.path, t("common.error"));
+          }}
+          className={buttonClassName}
+          title={t("common.openFolder")}
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+        </button>
+
+        {!isManaged && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleToggleLocalSkill(skill, !skill.enabled);
+            }}
+            disabled={toggling}
+            className={buttonClassName}
+            title={skill.enabled
+              ? t("globalWorkspace.localSkills.disable")
+              : t("globalWorkspace.localSkills.enable")}
+          >
+            {toggling ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : skill.enabled ? (
+              <PowerOff className="h-3.5 w-3.5" />
+            ) : (
+              <Power className="h-3.5 w-3.5" />
+            )}
+          </button>
+        )}
+
+        {skill.enabled && !isInSync && canPull && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -573,7 +658,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </button>
         )}
 
-        {!isInSync && (
+        {skill.enabled && !isInSync && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -786,6 +871,36 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           </div>
         </div>
 
+        {sourceOptions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[12px] text-muted">{t("mySkills.sourceOrigin")}</span>
+            {sourceOptions.map((source) => {
+              const active = sourceFilters.has(source.key);
+              return (
+                <button
+                  key={source.key}
+                  onClick={() => {
+                    setSourceFilters((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(source.key)) next.delete(source.key);
+                      else next.add(source.key);
+                      return next;
+                    });
+                  }}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    active
+                      ? "bg-accent text-white dark:bg-accent dark:text-white"
+                      : "bg-surface-hover text-muted hover:text-secondary"
+                  )}
+                >
+                  {source.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {allLocalTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
@@ -897,18 +1012,26 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           )}
         >
           {visibleLocalSkills.map((skill) => {
-            const statusMeta = getLocalStatusMeta(t, skill.sync_status);
+            const statusMeta = skill.enabled
+              ? getLocalStatusMeta(t, skill.sync_status)
+              : {
+                  label: t("globalWorkspace.localSkills.status.disabled"),
+                  className: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-300",
+                };
             const isManaged = !!skill.center_skill_id && managedLocalIds.has(skill.center_skill_id);
+            const displayDescription = getSkillDescription(skill);
 
             return (
               <WorkspaceSkillCard
                 key={`${skill.agent}:${skill.relative_path}`}
                 viewMode={viewMode}
                 title={skill.name}
-                description={skill.description || skill.relative_path}
+                description={displayDescription || skill.relative_path}
                 tags={skill.tags.map((tag) => ({ label: tag, className: getTagColor(tag, allLocalTags) }))}
                 status={statusMeta}
                 fileCount={skill.files.length}
+                sizeLabel={formatSkillSize(skill.size_bytes)}
+                sourceLabel={getSkillSourceLabel(skill)}
                 active={isManaged}
                 actions={renderLocalSkillActions(skill, viewMode)}
                 actionsHover={viewMode === "list"}
@@ -937,15 +1060,37 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
       <DetailSheet
         open={!!localDetailSkill}
         title={localDetailSkill?.name ?? ""}
-        description={localDetailSkill?.description}
+        description={localDetailSkill ? getSkillDescription(localDetailSkill) : undefined}
         meta={
           localDetailSkill ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("rounded-full px-2.5 py-1 text-[12px] font-medium", getLocalStatusMeta(t, localDetailSkill.sync_status).className)}>
-                {getLocalStatusMeta(t, localDetailSkill.sync_status).label}
+              <span className={cn(
+                "rounded-full px-2.5 py-1 text-[12px] font-medium",
+                localDetailSkill.enabled
+                  ? getLocalStatusMeta(t, localDetailSkill.sync_status).className
+                  : "bg-zinc-500/10 text-zinc-600 dark:text-zinc-300"
+              )}>
+                {localDetailSkill.enabled
+                  ? getLocalStatusMeta(t, localDetailSkill.sync_status).label
+                  : t("globalWorkspace.localSkills.status.disabled")}
               </span>
               <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
                 {localDetailSkill.relative_path}
+              </span>
+              <button
+                type="button"
+                onClick={() => void openSkillFolder(localDetailSkill.path, t("common.error"))}
+                className="inline-flex items-center gap-1 rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted transition-colors hover:text-secondary"
+                title={localDetailSkill.path}
+              >
+                <FolderOpen className="h-3 w-3" />
+                {t("common.openFolder")}
+              </button>
+              <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
+                {formatSkillSize(localDetailSkill.size_bytes)}
+              </span>
+              <span className="rounded-full bg-surface-hover px-2.5 py-1 text-[12px] text-muted">
+                {getSkillSourceLabel(localDetailSkill)}
               </span>
             </div>
           ) : null

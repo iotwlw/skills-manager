@@ -154,7 +154,10 @@ pub fn get_custom_tools(store: &SkillStore) -> Vec<CustomToolDef> {
     tool_adapters::custom_tools(store)
 }
 
-pub fn set_custom_tools(store: &SkillStore, custom_tools: &[CustomToolDef]) -> Result<(), AppError> {
+pub fn set_custom_tools(
+    store: &SkillStore,
+    custom_tools: &[CustomToolDef],
+) -> Result<(), AppError> {
     let json = serde_json::to_string(custom_tools)
         .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
     store
@@ -245,7 +248,8 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let all_keys: Vec<String> = infos.iter().map(|i| i.key.clone()).collect();
     let ordered_keys = merge_order(&saved, &all_keys);
 
-    let mut by_key: HashMap<String, ToolInfo> = infos.into_iter().map(|i| (i.key.clone(), i)).collect();
+    let mut by_key: HashMap<String, ToolInfo> =
+        infos.into_iter().map(|i| (i.key.clone(), i)).collect();
     ordered_keys
         .into_iter()
         .filter_map(|k| by_key.remove(&k))
@@ -366,7 +370,11 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
         set_custom_tools(store, &custom_tools)?;
     }
 
-    if changed || store.has_tool_key_references(OLD_KEY).map_err(AppError::db)? {
+    if changed
+        || store
+            .has_tool_key_references(OLD_KEY)
+            .map_err(AppError::db)?
+    {
         store
             .remap_tool_key_references(OLD_KEY, NEW_KEY)
             .map_err(AppError::db)?;
@@ -381,7 +389,6 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
 
     fn v(keys: &[&str]) -> Vec<String> {
         keys.iter().map(|s| s.to_string()).collect()
@@ -412,7 +419,14 @@ mod tests {
     fn new_priority_agent_slots_after_its_predecessor() {
         // Existing user whose saved order predates `grok`.
         let saved = v(&["claude_code", "codex", "gemini_cli", "cursor", "opencode"]);
-        let all = v(&["cursor", "claude_code", "codex", "grok", "gemini_cli", "opencode"]);
+        let all = v(&[
+            "cursor",
+            "claude_code",
+            "codex",
+            "grok",
+            "gemini_cli",
+            "opencode",
+        ]);
         let order = merge_order(&saved, &all);
         let codex = order.iter().position(|k| k == "codex").unwrap();
         assert_eq!(order[codex + 1], "grok", "grok must land right after codex");
@@ -425,7 +439,14 @@ mod tests {
 
     #[test]
     fn new_omp_agent_slots_after_mainstream_agents_for_existing_users() {
-        let saved = v(&["claude_code", "codex", "grok", "gemini_cli", "cursor", "opencode"]);
+        let saved = v(&[
+            "claude_code",
+            "codex",
+            "grok",
+            "gemini_cli",
+            "cursor",
+            "opencode",
+        ]);
         let all = v(&[
             "cursor",
             "claude_code",
@@ -475,7 +496,11 @@ mod tests {
                 CustomToolDef {
                     key: "custom_agent".to_string(),
                     display_name: "Custom Agent".to_string(),
-                    skills_dir: tmp.path().join("custom-skills").to_string_lossy().into_owned(),
+                    skills_dir: tmp
+                        .path()
+                        .join("custom-skills")
+                        .to_string_lossy()
+                        .into_owned(),
                     project_relative_skills_dir: Some(".custom/skills".to_string()),
                     category: ToolCategory::Lobster,
                 },
@@ -490,10 +515,16 @@ mod tests {
         assert!(customs.iter().any(|custom| custom.key == "custom_agent"));
 
         let custom_paths = get_custom_tool_paths(&store);
-        assert_eq!(custom_paths.get("omp_agent"), Some(&legacy_skills.to_string_lossy().into_owned()));
+        assert_eq!(
+            custom_paths.get("omp_agent"),
+            Some(&legacy_skills.to_string_lossy().into_owned())
+        );
 
         let project_paths = get_custom_tool_project_paths(&store);
-        assert_eq!(project_paths.get("omp_agent"), Some(&".legacy/skills".to_string()));
+        assert_eq!(
+            project_paths.get("omp_agent"),
+            Some(&".legacy/skills".to_string())
+        );
 
         set_custom_tools(
             &store,
@@ -516,10 +547,7 @@ mod tests {
         .unwrap();
         set_custom_tool_project_paths(
             &store,
-            &HashMap::from([(
-                "omp_agent".to_string(),
-                ".explicit/skills".to_string(),
-            )]),
+            &HashMap::from([("omp_agent".to_string(), ".explicit/skills".to_string())]),
         )
         .unwrap();
 
@@ -529,9 +557,15 @@ mod tests {
         assert!(!customs.iter().any(|custom| custom.key == "omp_agent"));
 
         let custom_paths = get_custom_tool_paths(&store);
-        assert_eq!(custom_paths.get("omp_agent"), Some(&explicit_skills.to_string_lossy().into_owned()));
+        assert_eq!(
+            custom_paths.get("omp_agent"),
+            Some(&explicit_skills.to_string_lossy().into_owned())
+        );
 
         let project_paths = get_custom_tool_project_paths(&store);
-        assert_eq!(project_paths.get("omp_agent"), Some(&".explicit/skills".to_string()));
+        assert_eq!(
+            project_paths.get("omp_agent"),
+            Some(&".explicit/skills".to_string())
+        );
     }
 }

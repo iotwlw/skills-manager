@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use super::{content_hash, skill_metadata};
+use super::{content_hash, skill_metadata, skill_origin};
 
 /// Lightweight config describing where an agent keeps project-level skills.
 #[derive(Debug, Clone)]
@@ -19,6 +19,9 @@ pub struct ProjectSkillInfo {
     #[serde(default)]
     pub relative_path: String,
     pub description: Option<String>,
+    pub description_zh: String,
+    pub size_bytes: u64,
+    pub source_origin: skill_origin::SkillSourceOrigin,
     pub path: String,
     pub files: Vec<String>,
     pub enabled: bool,
@@ -185,10 +188,20 @@ fn read_skills_from_dir_recursive(
             let files = list_files(&path);
 
             skills.push(ProjectSkillInfo {
+                description_zh: skill_metadata::chinese_description_for_skill(
+                    &name,
+                    meta.description.as_deref(),
+                    meta.description_zh.as_deref(),
+                ),
                 name,
                 dir_name: dir_name.clone(),
                 relative_path,
                 description: meta.description,
+                size_bytes: content_hash::directory_content_size_bytes(&path),
+                source_origin: skill_origin::local_source_origin(
+                    agent_display_name,
+                    Some(path.to_string_lossy().to_string()),
+                ),
                 path: path.to_string_lossy().to_string(),
                 files,
                 enabled,

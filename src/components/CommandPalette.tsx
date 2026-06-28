@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { getPresetIconOption } from "../lib/presetIcons";
+import { getSkillDescription, getSkillSearchText } from "../lib/skillDisplay";
 import { cn } from "../utils";
 
 type ItemKind = "skill" | "preset" | "project" | "action";
@@ -88,14 +89,14 @@ export function CommandPalette() {
         (s) =>
           !q ||
           s.name.toLowerCase().includes(q) ||
-          (s.description || "").toLowerCase().includes(q),
+          getSkillSearchText(s).includes(q),
       )
       .slice(0, 8)
       .map((s) => ({
         id: `skill:${s.id}`,
         kind: "skill",
         label: s.name,
-        sublabel: s.description || undefined,
+        sublabel: getSkillDescription(s) || undefined,
         icon: <Layers className="h-3.5 w-3.5" />,
         run: () => {
           navigate("/my-skills");

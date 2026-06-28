@@ -231,7 +231,8 @@ pub(crate) fn set_remote_unlocked(skills_dir: &Path, url: &str) -> Result<()> {
     // upstream the first push must use `-u` and the "ahead" count reads 0.
     // Logging it here is what makes "Sync says up to date but remote is empty"
     // diagnosable from a single log line.
-    let upstream_tracking = run_git(skills_dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_ok();
+    let upstream_tracking =
+        run_git(skills_dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_ok();
     log::info!("git set_remote: origin configured on branch {branch}, upstream_tracking={upstream_tracking}");
 
     Ok(())
@@ -807,7 +808,11 @@ fn run_git_checked(dir: &Path, args: &[&str]) -> Result<()> {
         // (commit, push -u, fetch+merge, tag, read-tree, …) goes through here,
         // so this is where "sync silently failed" becomes visible in the log.
         // Redact the args because some carry the remote URL (which may embed a token).
-        log::warn!("git failed [{}]: {}", redact_urls_in_text(&args.join(" ")), e);
+        log::warn!(
+            "git failed [{}]: {}",
+            redact_urls_in_text(&args.join(" ")),
+            e
+        );
         return Err(e);
     }
     Ok(())
@@ -1119,7 +1124,9 @@ mod tests {
         // Pin autoSetupRemote off in the repo's local config so the plain `git push`
         // deterministically fails and we actually exercise the `-u` fallback, even on
         // a dev box whose global config sets push.autoSetupRemote=true.
-        assert!(git(&["config", "push.autoSetupRemote", "false"]).status.success());
+        assert!(git(&["config", "push.autoSetupRemote", "false"])
+            .status
+            .success());
         std::fs::write(work.join("a.txt"), "hello").unwrap();
         assert!(git(&["add", "-A"]).status.success());
         assert!(git(&["commit", "-m", "initial"]).status.success());
@@ -1183,7 +1190,11 @@ mod tests {
         std::fs::write(a.join("skill.md"), "base\n").unwrap();
         assert!(git(&a, &["add", "-A"]).status.success());
         assert!(git(&a, &["commit", "-m", "base"]).status.success());
-        assert!(git(&a, &["remote", "add", "origin", remote.to_str().unwrap()]).status.success());
+        assert!(
+            git(&a, &["remote", "add", "origin", remote.to_str().unwrap()])
+                .status
+                .success()
+        );
         assert!(git(&a, &["push", "-u", "origin", "main"]).status.success());
 
         // Machine B: clone, then both sides edit the SAME line differently.
@@ -1194,7 +1205,9 @@ mod tests {
             .unwrap()
             .status
             .success());
-        assert!(git(&b, &["config", "user.email", "test@example.com"]).status.success());
+        assert!(git(&b, &["config", "user.email", "test@example.com"])
+            .status
+            .success());
         assert!(git(&b, &["config", "user.name", "Test"]).status.success());
 
         std::fs::write(a.join("skill.md"), "edited on A\n").unwrap();

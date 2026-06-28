@@ -27,6 +27,7 @@ interface MultiSelectToolbarProps {
   updating?: boolean;
   updatingProject?: boolean;
   updatingCenter?: boolean;
+  toggling?: boolean;
   labels: MultiSelectToolbarLabels;
   onUpdate?: () => void;
   onUpdateProject?: () => void;
@@ -49,6 +50,7 @@ export function MultiSelectToolbar({
   updating = false,
   updatingProject = false,
   updatingCenter = false,
+  toggling = false,
   labels,
   onUpdate,
   onUpdateProject,
@@ -115,8 +117,9 @@ export function MultiSelectToolbar({
           {showToggle && (
             <button
               onClick={onToggle}
+              disabled={toggling}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium text-white transition-colors",
+                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium text-white transition-colors disabled:opacity-50",
                 anyDisabled
                   ? "bg-emerald-600/90 hover:bg-emerald-500"
                   : "bg-amber-600/90 hover:bg-amber-500"

@@ -4784,6 +4784,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "toml 0.8.2",
  "unicode-normalization",
  "urlencoding",
  "uuid",

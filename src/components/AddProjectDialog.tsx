@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { X, FolderOpen, Search, Check } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { X, FolderOpen, Search, Check, Bot, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { cn } from "../utils";
@@ -13,7 +13,11 @@ interface Props {
 
 export function AddProjectDialog({ open, onClose, onAdded }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<"manual" | "scan" | "linked">("manual");
+  const [tab, setTab] = useState<"codex" | "manual" | "scan" | "linked">("codex");
+  const [codexLoading, setCodexLoading] = useState(false);
+  const [codexLoaded, setCodexLoaded] = useState(false);
+  const [codexProjects, setCodexProjects] = useState<api.CodexProjectCandidate[]>([]);
+  const [codexSelected, setCodexSelected] = useState<Set<string>>(new Set());
   const [scanRoot, setScanRoot] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState<string[]>([]);
@@ -23,9 +27,29 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
   const [linkedName, setLinkedName] = useState("");
   const [linkedPath, setLinkedPath] = useState("");
 
+  const loadCodexProjects = useCallback(async () => {
+    setCodexLoading(true);
+    try {
+      const projects = await api.discoverCodexProjects();
+      setCodexProjects(projects);
+      setCodexSelected(new Set(projects.filter((project) => !project.imported).map((project) => project.path)));
+      setCodexLoaded(true);
+    } catch {
+      setCodexProjects([]);
+      setCodexSelected(new Set());
+      setCodexLoaded(true);
+    } finally {
+      setCodexLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
-    setTab("manual");
+    setTab("codex");
+    setCodexLoading(false);
+    setCodexLoaded(false);
+    setCodexProjects([]);
+    setCodexSelected(new Set());
     setScanRoot("");
     setScanning(false);
     setScanResults([]);
@@ -34,9 +58,40 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
     setScanned(false);
     setLinkedName("");
     setLinkedPath("");
-  }, [open]);
+    void loadCodexProjects();
+  }, [open, loadCodexProjects]);
+
+  const codexImportableProjects = useMemo(
+    () => codexProjects.filter((project) => !project.imported),
+    [codexProjects]
+  );
 
   if (!open) return null;
+
+  const toggleCodexSelect = (path: string) => {
+    const project = codexProjects.find((item) => item.path === path);
+    if (!project || project.imported) return;
+    setCodexSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const handleImportCodexProjects = async () => {
+    if (codexSelected.size === 0) return;
+    setAdding(true);
+    try {
+      await api.importCodexProjects(Array.from(codexSelected));
+      await onAdded();
+      onClose();
+    } catch {
+      // error handled by parent/toast boundary where available
+    } finally {
+      setAdding(false);
+    }
+  };
 
   const handleSelectFolder = async () => {
     const dir = await dialogOpen({ directory: true, multiple: false });
@@ -121,7 +176,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-surface border border-border rounded-xl w-full max-w-[480px] p-5 shadow-2xl">
+      <div className="relative bg-surface border border-border rounded-xl w-full max-w-[560px] p-5 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold text-primary">
             {t("project.addProjectTitle")}
@@ -136,7 +191,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-4 p-0.5 bg-background rounded-lg border border-border-subtle">
-          {(["manual", "scan", "linked"] as const).map((key) => (
+          {(["codex", "manual", "scan", "linked"] as const).map((key) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -148,7 +203,9 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
               )}
             >
               {t(
-                key === "manual"
+                key === "codex"
+                  ? "project.tabCodex"
+                  : key === "manual"
                   ? "project.tabManual"
                   : key === "scan"
                     ? "project.tabScan"
@@ -158,7 +215,124 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
           ))}
         </div>
 
-        {tab === "manual" ? (
+        {tab === "codex" ? (
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-secondary">
+                  {t("project.codexProjectsTitle")}
+                </p>
+                <p className="mt-1 text-[12px] leading-5 text-muted">
+                  {t("project.codexProjectsHint")}
+                </p>
+              </div>
+              <button
+                onClick={loadCodexProjects}
+                disabled={codexLoading}
+                className="shrink-0 px-2.5 py-2 rounded-[4px] border border-border-subtle bg-background text-muted hover:text-secondary hover:border-border transition-all outline-none disabled:opacity-50"
+                title={t("project.codexRefresh")}
+              >
+                <RefreshCw className={cn("w-4 h-4", codexLoading && "animate-spin")} />
+              </button>
+            </div>
+
+            {codexLoading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-muted">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                {t("project.codexLoading")}
+              </div>
+            ) : codexLoaded && codexProjects.length === 0 ? (
+              <p className="text-[13px] text-muted py-6 text-center">
+                {t("project.codexNoProjects")}
+              </p>
+            ) : codexProjects.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-[13px] text-tertiary">
+                    {t("project.codexProjectCount", { count: codexProjects.length })}
+                  </span>
+                  <button
+                    onClick={() => {
+                      const allImportableSelected =
+                        codexImportableProjects.length > 0 &&
+                        codexSelected.size === codexImportableProjects.length;
+                      setCodexSelected(
+                        allImportableSelected
+                          ? new Set()
+                          : new Set(codexImportableProjects.map((project) => project.path))
+                      );
+                    }}
+                    disabled={codexImportableProjects.length === 0}
+                    className="text-[12px] text-accent hover:underline outline-none disabled:text-muted disabled:no-underline"
+                  >
+                    {codexImportableProjects.length > 0 &&
+                    codexSelected.size === codexImportableProjects.length
+                      ? t("project.deselectAll")
+                      : t("project.selectAll")}
+                  </button>
+                </div>
+                <div className="max-h-[280px] overflow-y-auto space-y-1">
+                  {codexProjects.map((project) => {
+                    const selectedProject = codexSelected.has(project.path);
+                    return (
+                      <button
+                        key={project.path}
+                        onClick={() => toggleCodexSelect(project.path)}
+                        disabled={project.imported}
+                        className={cn(
+                          "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left text-[13px] transition-all outline-none border",
+                          project.imported
+                            ? "bg-background text-muted border-border-subtle cursor-default"
+                            : selectedProject
+                              ? "bg-accent-bg/50 text-primary border-accent-border/30"
+                              : "bg-background text-tertiary border-border-subtle hover:border-border"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center shrink-0",
+                            selectedProject
+                              ? "bg-accent-dark border-accent-border text-white"
+                              : project.imported
+                                ? "bg-surface-hover border-border-subtle text-muted"
+                                : "border-border-subtle"
+                          )}
+                        >
+                          {(selectedProject || project.imported) && <Check className="w-3 h-3" />}
+                        </div>
+                        <Bot className="h-4 w-4 shrink-0 text-muted" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium text-secondary">{project.name}</div>
+                          <div className="truncate font-mono text-[11px] text-muted">{project.path}</div>
+                        </div>
+                        <div className="shrink-0 text-[11px] text-muted">
+                          {project.imported
+                            ? t("project.codexImported")
+                            : project.skill_count > 0
+                              ? t("project.codexSkillCount", { count: project.skill_count })
+                              : project.has_codex_skills
+                                ? t("project.codexEmptySkills")
+                                : t("project.codexNoSkillsDir")}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    onClick={handleImportCodexProjects}
+                    disabled={codexSelected.size === 0 || adding}
+                    className="px-3 py-1.5 rounded-[4px] bg-accent-dark hover:bg-accent text-white text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-accent-border outline-none"
+                  >
+                    {adding
+                      ? t("common.loading")
+                      : t("project.importCodexSelected", { count: codexSelected.size })}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : tab === "manual" ? (
           <div className="space-y-3">
             <p className="text-[13px] text-tertiary">
               {t("project.addManual")}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Folder,
+  FolderOpen,
   ChevronDown,
   ChevronUp,
   Github,
@@ -27,6 +28,8 @@ import { SkillMarkdown } from "./SkillMarkdown";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
+import { formatSkillSize, getSkillDescription, getSkillSourceLabel } from "../lib/skillDisplay";
+import { openSkillFolder } from "../lib/openers";
 
 interface Props {
   skill: ManagedSkill | null;
@@ -198,6 +201,7 @@ function SkillDetailPanelContent({
   const sourceTypeLabel = (type: string) => (type === "skillssh" ? "skills.sh" : type);
 
   const metadataItems = [
+    { label: t("mySkills.sourceOrigin"), value: getSkillSourceLabel(skill) },
     { label: t("mySkills.sourceType"), value: sourceTypeLabel(skill.source_type) },
     { label: t("mySkills.sourceRef"), value: skill.source_ref },
     { label: t("mySkills.sourceResolved"), value: skill.source_ref_resolved },
@@ -223,6 +227,7 @@ function SkillDetailPanelContent({
         ? t("mySkills.agentToggleDisabledGlobally")
         : null,
   }));
+  const displayDescription = getSkillDescription(skill);
 
   const meta = (
     <>
@@ -247,6 +252,17 @@ function SkillDetailPanelContent({
         <span className="font-mono truncate" title={skill.central_path}>
           {skill.central_path}
         </span>
+        <button
+          type="button"
+          onClick={() => void openSkillFolder(skill.central_path, t("common.error"))}
+          className="shrink-0 rounded p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+          title={t("common.openFolder")}
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+        </button>
+        <span className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-muted">
+          {formatSkillSize(skill.size_bytes)}
+        </span>
       </div>
       {metadataItems.length > 0 && (
         <div className="mt-4 rounded-xl border border-border-subtle bg-surface/70">
@@ -260,7 +276,7 @@ function SkillDetailPanelContent({
             <span className="flex min-w-0 items-center gap-2">
               <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border-subtle bg-bg-secondary px-2 py-1 text-[12px] text-muted">
                 {sourceIcon(skill.source_type)}
-                {sourceTypeLabel(skill.source_type)}
+                {getSkillSourceLabel(skill)}
               </span>
               <span className="truncate text-[13px] font-medium text-secondary">
                 {t("mySkills.sourceType")}
@@ -307,7 +323,7 @@ function SkillDetailPanelContent({
     <DetailSheet
       open={true}
       title={skill.name}
-      description={skill.description ? <p className="line-clamp-3">{skill.description}</p> : undefined}
+      description={displayDescription ? <p className="line-clamp-3">{displayDescription}</p> : undefined}
       meta={meta}
       onClose={onClose}
     >

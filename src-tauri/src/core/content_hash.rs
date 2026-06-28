@@ -3,7 +3,13 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const IGNORED: &[&str] = &[".git", ".DS_Store", "Thumbs.db", ".gitignore", "__pycache__"];
+const IGNORED: &[&str] = &[
+    ".git",
+    ".DS_Store",
+    "Thumbs.db",
+    ".gitignore",
+    "__pycache__",
+];
 
 /// True for names excluded from a skill's content scope: the exact-match
 /// [`IGNORED`] entries plus compiled-Python artifacts (`*.pyc`). These are
@@ -105,6 +111,14 @@ pub fn hash_directory(dir: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+pub fn directory_content_size_bytes(dir: &Path) -> u64 {
+    list_content_files(dir)
+        .into_iter()
+        .filter_map(|entry| std::fs::metadata(entry.path).ok())
+        .map(|metadata| metadata.len())
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +208,16 @@ mod tests {
         let h2 = hash_directory(tmp.path()).unwrap();
 
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn directory_content_size_uses_content_scope() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        fs::create_dir_all(tmp.path().join("__pycache__")).unwrap();
+        fs::write(tmp.path().join("__pycache__/a.pyc"), "ignored").unwrap();
+
+        assert_eq!(directory_content_size_bytes(tmp.path()), 5);
     }
 
     #[test]

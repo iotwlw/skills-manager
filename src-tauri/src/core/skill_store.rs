@@ -1410,22 +1410,23 @@ mod scenario_membership_tests {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
 
-        store.insert_scenario(&ScenarioRecord {
-            id: "s1".to_string(),
-            name: "S1".to_string(),
-            description: None,
-            icon: None,
-            sort_order: 0,
-            created_at: 1,
-            updated_at: 1,
-        })
-        .unwrap();
+        store
+            .insert_scenario(&ScenarioRecord {
+                id: "s1".to_string(),
+                name: "S1".to_string(),
+                description: None,
+                icon: None,
+                sort_order: 0,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
         store.upsert_skill(&sample_skill("k1")).unwrap();
 
         let memberships = vec![
-            membership("s1", "k1"),       // valid
-            membership("s1", "ghost"),    // skill missing
-            membership("ghost-s", "k1"),  // scenario missing
+            membership("s1", "k1"),      // valid
+            membership("s1", "ghost"),   // skill missing
+            membership("ghost-s", "k1"), // scenario missing
         ];
 
         // Must not panic with a FOREIGN KEY constraint failure.
@@ -1435,7 +1436,9 @@ mod scenario_membership_tests {
 
         assert_eq!(store.get_skill_ids_for_scenario("s1").unwrap(), vec!["k1"]);
         assert_eq!(
-            store.get_enabled_tools_for_scenario_skill("s1", "k1").unwrap(),
+            store
+                .get_enabled_tools_for_scenario_skill("s1", "k1")
+                .unwrap(),
             vec!["ToolA"]
         );
         assert!(store

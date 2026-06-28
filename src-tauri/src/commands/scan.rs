@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
@@ -131,6 +132,7 @@ pub async fn import_existing_skill(
             };
 
             store.insert_skill(&record)?;
+            super::skills::apply_auto_series_tags_unlocked(&store)?;
 
             sync_metadata::write_all_from_db_unlocked(&store)
         })
@@ -142,10 +144,15 @@ pub async fn import_existing_skill(
 }
 
 #[tauri::command]
-pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
+pub async fn import_all_discovered(
+    source_paths: Option<Vec<String>>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         sync_metadata::with_repo_lock("import all discovered skills", || {
+            let source_path_filter: Option<HashSet<String>> =
+                source_paths.map(|paths| paths.into_iter().collect());
             let discovered = store.get_all_discovered()?;
             let groups = scanner::group_discovered(&discovered);
 
@@ -155,8 +162,16 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                 if group.imported {
                     continue;
                 }
-                if let Some(first) = group.locations.first() {
-                    let path = PathBuf::from(&first.found_path);
+                let selected_location = match &source_path_filter {
+                    Some(filter) => group
+                        .locations
+                        .iter()
+                        .find(|location| filter.contains(&location.found_path)),
+                    None => group.locations.first(),
+                };
+
+                if let Some(location) = selected_location {
+                    let path = PathBuf::from(&location.found_path);
 
                     if let Ok(result) = installer::install_from_local(&path, Some(&group.name)) {
                         if store
@@ -173,7 +188,7 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                             name: result.name,
                             description: result.description,
                             source_type: "import".to_string(),
-                            source_ref: Some(first.found_path.clone()),
+                            source_ref: Some(location.found_path.clone()),
                             source_ref_resolved: None,
                             source_subpath: None,
                             source_branch: None,
@@ -190,6 +205,7 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                             last_check_error: None,
                         };
                         store.insert_skill(&record)?;
+                        super::skills::apply_auto_series_tags_unlocked(&store)?;
                         changed = true;
                     }
                 }

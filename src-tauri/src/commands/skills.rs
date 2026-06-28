@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use walkdir::WalkDir;
 use crate::core::{
     audit_log::AuditDraft,
     central_repo,
+    content_hash,
     error::AppError,
     git_fetcher,
     install_cancel::InstallCancelRegistry,
@@ -16,6 +18,7 @@ use crate::core::{
     repo_lock::RepoLock,
     scanner,
     skill_metadata::{self, is_valid_skill_dir},
+    skill_origin::{self, SkillSourceOrigin},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
     timing::should_log_first_or_slow,
@@ -42,11 +45,20 @@ pub struct BatchDeleteSkillsResult {
     pub failed: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct AutoTagSkillSeriesResult {
+    pub skills_updated: usize,
+    pub tags_added: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ManagedSkillDto {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub description_zh: String,
+    pub size_bytes: u64,
+    pub source_origin: SkillSourceOrigin,
     pub source_type: String,
     pub source_ref: Option<String>,
     pub source_ref_resolved: Option<String>,
@@ -178,6 +190,131 @@ impl Drop for CancelRegistrationGuard {
 }
 
 static GET_MANAGED_SKILLS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
+const HIGH_CONFIDENCE_SERIES_PREFIXES: &[&str] = &["gstack"];
+const SERIES_PREFIX_STOP_WORDS: &[&str] = &[
+    "agent", "agents", "example", "import", "local", "sample", "skill", "skills", "test", "tool",
+    "tools",
+];
+
+fn slugify_series_source(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_sep = false;
+    for ch in value.chars().flat_map(|ch| ch.to_lowercase()) {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_was_sep = false;
+        } else if matches!(ch, '-' | '_' | '.' | ' ' | '/') && !last_was_sep && !out.is_empty() {
+            out.push('-');
+            last_was_sep = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn series_prefix_from_slug(slug: &str) -> Option<String> {
+    let prefix = slug.split('-').next().unwrap_or_default();
+    if prefix.len() < 3 {
+        return None;
+    }
+    if SERIES_PREFIX_STOP_WORDS.contains(&prefix) {
+        return None;
+    }
+    if slug == prefix || slug.starts_with(&format!("{prefix}-")) {
+        return Some(prefix.to_string());
+    }
+    None
+}
+
+fn skill_series_prefix(skill: &SkillRecord) -> Option<String> {
+    let mut sources = Vec::new();
+    if let Some(name) = Path::new(&skill.central_path).file_name() {
+        sources.push(name.to_string_lossy().to_string());
+    }
+    if let Some(name) = skill.source_subpath.as_ref().and_then(|path| {
+        Path::new(path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    }) {
+        sources.push(name);
+    }
+    sources.push(skill.name.clone());
+
+    sources
+        .iter()
+        .filter_map(|source| series_prefix_from_slug(&slugify_series_source(source)))
+        .next()
+}
+
+fn append_tag_if_missing(tags: &mut Vec<String>, tag: &str) -> bool {
+    if tags
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(tag))
+    {
+        return false;
+    }
+    tags.push(tag.to_string());
+    tags.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    true
+}
+
+pub(crate) fn apply_auto_series_tags_unlocked(
+    store: &SkillStore,
+) -> anyhow::Result<AutoTagSkillSeriesResult> {
+    let skills = store.get_all_skills()?;
+    let mut skill_prefixes: HashMap<String, String> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+
+    for skill in &skills {
+        if let Some(prefix) = skill_series_prefix(skill) {
+            skill_prefixes.insert(skill.id.clone(), prefix.clone());
+            grouped.entry(prefix).or_default().push(skill.id.clone());
+        }
+    }
+
+    let eligible_prefixes: HashSet<String> = grouped
+        .into_iter()
+        .filter_map(|(prefix, ids)| {
+            if ids.len() >= 2 || HIGH_CONFIDENCE_SERIES_PREFIXES.contains(&prefix.as_str()) {
+                Some(prefix)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if eligible_prefixes.is_empty() {
+        return Ok(AutoTagSkillSeriesResult {
+            skills_updated: 0,
+            tags_added: 0,
+        });
+    }
+
+    let tags_map = store.get_tags_map()?;
+    let mut skills_updated = 0usize;
+    let mut tags_added = 0usize;
+
+    for skill in &skills {
+        let Some(prefix) = skill_prefixes.get(&skill.id) else {
+            continue;
+        };
+        if !eligible_prefixes.contains(prefix) {
+            continue;
+        }
+
+        let mut tags = tags_map.get(&skill.id).cloned().unwrap_or_default();
+        if append_tag_if_missing(&mut tags, prefix) {
+            store.set_tags_for_skill(&skill.id, &tags)?;
+            skills_updated += 1;
+            tags_added += 1;
+        }
+    }
+
+    Ok(AutoTagSkillSeriesResult {
+        skills_updated,
+        tags_added,
+    })
+}
 
 #[tauri::command]
 pub async fn get_managed_skills(
@@ -347,9 +484,12 @@ fn classify_diff_bytes(bytes: Option<Vec<u8>>) -> (&'static str, Option<String>)
 /// Diff the whole content scope of two skill directories. `original_dir` is
 /// the central copy (old), `updated_dir` is the source (new). Uses the same
 /// file enumeration as the hash so it reports exactly what flips the badge.
-fn build_source_diff_entries(original_dir: &Path, updated_dir: &Path) -> Vec<SkillSourceDiffEntryDto> {
-    use std::collections::BTreeMap;
+fn build_source_diff_entries(
+    original_dir: &Path,
+    updated_dir: &Path,
+) -> Vec<SkillSourceDiffEntryDto> {
     use crate::core::content_hash::{self, ContentEntry};
+    use std::collections::BTreeMap;
 
     let index = |dir: &Path| -> BTreeMap<String, ContentEntry> {
         content_hash::list_content_files(dir)
@@ -720,14 +860,14 @@ pub async fn install_local(
                 remote_revision: None,
                 update_status: "local_only".to_string(),
             };
-            let _lock = RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
+            let _lock =
+                RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
             let result =
                 installer::install_from_local(&path, name.as_deref()).map_err(AppError::io)?;
             let skill_name = result.name.clone();
             // Install only adds the skill to the central library; preset
             // membership is an explicit action (see issue #213).
-            let skill_id =
-                store_installed_skill_unlocked(&store, &result, &metadata, None)?;
+            let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
             Ok((skill_id, skill_name))
         })();
         log_install_outcome(&store, "local", outcome.as_ref());
@@ -794,7 +934,8 @@ pub async fn install_git(
 
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock = RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
                 let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let result = installer::install_from_git_dir(&skill_dir, name.as_deref())
@@ -810,12 +951,7 @@ pub async fn install_git(
                     update_status: "up_to_date".to_string(),
                 };
                 let skill_name = result.name.clone();
-                let skill_id = store_installed_skill_unlocked(
-                    &store,
-                    &result,
-                    &metadata,
-                    None,
-                )?;
+                let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
                 Ok((skill_id, skill_name))
             })();
 
@@ -890,7 +1026,8 @@ pub async fn install_from_skillssh(
 
             emit_progress("installing");
             let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock = RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
                 let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
                 let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
                 let source_ref = format!("{}/{}", source, skill_id);
@@ -913,12 +1050,7 @@ pub async fn install_from_skillssh(
                     update_status: "up_to_date".to_string(),
                 };
                 let skill_name = result.name.clone();
-                let new_id = store_installed_skill_unlocked(
-                    &store,
-                    &result,
-                    &metadata,
-                    None,
-                )?;
+                let new_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
                 Ok((new_id, skill_name))
             })();
 
@@ -1047,8 +1179,8 @@ pub async fn confirm_git_install(
             let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
             let all_dirs = collect_git_skill_dirs(&skill_dir);
             let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
-            let _lock = RepoLock::acquire_foreground("confirm git install")
-                .map_err(AppError::db)?;
+            let _lock =
+                RepoLock::acquire_foreground("confirm git install").map_err(AppError::db)?;
 
             for dir in &all_dirs {
                 let rel_key = skill_rel_key(&skill_dir, dir);
@@ -1296,8 +1428,7 @@ pub async fn relink_local_skill_source(
             .map_err(AppError::db)?;
 
         let result = (|| -> Result<(), AppError> {
-            let _lock = RepoLock::acquire_foreground("relink local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
             let staged_path = staged_path_for(&skill.central_path);
             let install_result = installer::install_from_local_to_destination(
                 &path,
@@ -1357,8 +1488,7 @@ pub async fn detach_local_skill_source(
         }
 
         {
-            let _lock = RepoLock::acquire_foreground("detach local skill")
-                .map_err(AppError::db)?;
+            let _lock = RepoLock::acquire_foreground("detach local skill").map_err(AppError::db)?;
             store
                 .update_skill_after_reinstall(
                     &skill.id,
@@ -1405,20 +1535,31 @@ fn managed_skill_to_dto(
 
     let preset_ids = store.get_scenarios_for_skill(&skill.id).unwrap_or_default();
     let tags = tags_map.get(&skill.id).cloned().unwrap_or_default();
+    let source_origin = skill_origin::source_origin_for_skill(&skill, &tags);
 
     // Prefer description from SKILL.md so the list view reflects edits made
     // directly on disk (file watcher emits a change event; this read serves
     // the fresh value). Keep `name` on the DB value to avoid drift with
     // sync target directory names.
-    let description = skill_metadata::parse_skill_md(Path::new(&skill.central_path))
+    let parsed_meta = skill_metadata::parse_skill_md(Path::new(&skill.central_path));
+    let description = parsed_meta
         .description
         .filter(|s| !s.trim().is_empty())
         .or(skill.description);
+    let description_zh = skill_metadata::chinese_description_for_skill(
+        &skill.name,
+        description.as_deref(),
+        parsed_meta.description_zh.as_deref(),
+    );
+    let size_bytes = content_hash::directory_content_size_bytes(Path::new(&skill.central_path));
 
     ManagedSkillDto {
         id: skill.id,
         name: skill.name,
         description,
+        description_zh,
+        size_bytes,
+        source_origin,
         source_type: skill.source_type,
         source_ref: skill.source_ref,
         source_ref_resolved: skill.source_ref_resolved,
@@ -1440,7 +1581,10 @@ fn managed_skill_to_dto(
     }
 }
 
-pub fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkillDto, AppError> {
+pub fn managed_skill_by_id(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1508,8 +1652,7 @@ pub fn update_git_skill_internal(
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
-        let _lock = RepoLock::acquire_foreground("update installed skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
         if content_changed {
             let staged_path = staged_path_for(&skill.central_path);
@@ -1617,8 +1760,7 @@ pub fn reimport_local_skill_internal(
         .map_err(AppError::db)?;
 
     let result = (|| -> Result<(), AppError> {
-        let _lock = RepoLock::acquire_foreground("reimport local skill")
-            .map_err(AppError::db)?;
+        let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
         let staged_path = staged_path_for(&skill.central_path);
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
@@ -1683,6 +1825,7 @@ pub fn store_installed_skill_unlocked(
                 .add_skill_to_scenario(scenario_id, &existing.id)
                 .map_err(AppError::db)?;
         }
+        apply_auto_series_tags_unlocked(store).map_err(AppError::db)?;
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
         if let Some(scenario_id) = active_scenario_id {
@@ -1726,6 +1869,7 @@ pub fn store_installed_skill_unlocked(
             .add_skill_to_scenario(scenario_id, &id)
             .map_err(AppError::db)?;
     }
+    apply_auto_series_tags_unlocked(store).map_err(AppError::db)?;
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
     if let Some(scenario_id) = active_scenario_id {
@@ -2118,6 +2262,24 @@ pub async fn get_all_tags(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Strin
 }
 
 #[tauri::command]
+pub async fn auto_tag_skill_series(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<AutoTagSkillSeriesResult, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        sync_metadata::with_repo_lock("auto tag skill series", || {
+            let result = apply_auto_series_tags_unlocked(&store)?;
+            if result.tags_added > 0 {
+                sync_metadata::write_all_from_db_unlocked(&store)?;
+            }
+            Ok(result)
+        })
+        .map_err(AppError::db)
+    })
+    .await?
+}
+
+#[tauri::command]
 pub async fn set_skill_tags(
     skill_id: String,
     tags: Vec<String>,
@@ -2256,8 +2418,8 @@ pub async fn batch_import_folder(
             }
 
             let install_result = (|| -> Result<String, AppError> {
-                let _lock = RepoLock::acquire_foreground("batch import skill")
-                    .map_err(AppError::db)?;
+                let _lock =
+                    RepoLock::acquire_foreground("batch import skill").map_err(AppError::db)?;
                 let result =
                     installer::install_from_local(dir, Some(&name)).map_err(AppError::io)?;
                 let metadata = InstallSourceMetadata {
@@ -2361,6 +2523,73 @@ mod tests {
     }
 
     #[test]
+    fn auto_series_tags_gstack_skills() {
+        let repo = test_repo();
+        let browse_dir = write_skill_dir("gstack-browse");
+        let qa_dir = write_skill_dir("gstack-qa");
+        repo.store
+            .insert_skill(&sample_skill("skill-1", "gstack-browse", &browse_dir))
+            .unwrap();
+        repo.store
+            .insert_skill(&sample_skill("skill-2", "gstack-qa", &qa_dir))
+            .unwrap();
+
+        let result = apply_auto_series_tags_unlocked(&repo.store).unwrap();
+        let tags = repo.store.get_tags_map().unwrap();
+
+        assert_eq!(
+            result,
+            AutoTagSkillSeriesResult {
+                skills_updated: 2,
+                tags_added: 2,
+            }
+        );
+        assert_eq!(tags.get("skill-1").unwrap(), &vec!["gstack".to_string()]);
+        assert_eq!(tags.get("skill-2").unwrap(), &vec!["gstack".to_string()]);
+    }
+
+    #[test]
+    fn auto_series_preserves_existing_tags() {
+        let repo = test_repo();
+        let browse_dir = write_skill_dir("gstack-browse");
+        repo.store
+            .insert_skill(&sample_skill("skill-1", "gstack-browse", &browse_dir))
+            .unwrap();
+        repo.store
+            .set_tags_for_skill("skill-1", &["qa".to_string()])
+            .unwrap();
+
+        let result = apply_auto_series_tags_unlocked(&repo.store).unwrap();
+        let tags = repo.store.get_tags_map().unwrap();
+
+        assert_eq!(result.tags_added, 1);
+        assert_eq!(
+            tags.get("skill-1").unwrap(),
+            &vec!["gstack".to_string(), "qa".to_string()]
+        );
+    }
+
+    #[test]
+    fn auto_series_skips_single_low_confidence_prefix() {
+        let repo = test_repo();
+        let plan_dir = write_skill_dir("plan-ceo-review");
+        repo.store
+            .insert_skill(&sample_skill("skill-1", "plan-ceo-review", &plan_dir))
+            .unwrap();
+
+        let result = apply_auto_series_tags_unlocked(&repo.store).unwrap();
+
+        assert_eq!(
+            result,
+            AutoTagSkillSeriesResult {
+                skills_updated: 0,
+                tags_added: 0,
+            }
+        );
+        assert!(repo.store.get_tags_map().unwrap().is_empty());
+    }
+
+    #[test]
     fn batch_delete_removes_skills_targets_and_stale_metadata_once() {
         let repo = test_repo();
         let skill_one_dir = write_skill_dir("skill-one");
@@ -2422,7 +2651,11 @@ mod tests {
         let dir = root.join(rel);
         fs::create_dir_all(&dir).unwrap();
         let basename = dir.file_name().unwrap().to_string_lossy().to_string();
-        fs::write(dir.join("SKILL.md"), format!("---\nname: {basename}\n---\n")).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {basename}\n---\n"),
+        )
+        .unwrap();
         dir
     }
 

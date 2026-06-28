@@ -41,6 +41,25 @@ const MARKET_SEARCH_STEP = 60;
 const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
+const ALL_SCAN_FOLDERS = "__all_scan_folders__";
+
+type ScanFolderOption = {
+  path: string;
+  total: number;
+  pending: number;
+};
+
+function getScanFolderPath(path: string) {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const separatorIndex = normalized.lastIndexOf("/");
+  if (separatorIndex === 2 && /^[A-Za-z]:/.test(normalized)) {
+    return normalized.slice(0, 3);
+  }
+  if (separatorIndex <= 0) {
+    return separatorIndex === 0 ? "/" : normalized;
+  }
+  return normalized.slice(0, separatorIndex);
+}
 
 export function InstallSkills() {
   const { t } = useTranslation();
@@ -67,6 +86,7 @@ export function InstallSkills() {
   const [gitSelections, setGitSelections] = useState<{ rel_path: string; name: string; description: string | null; selected: boolean }[]>([]);
   const [gitConfirmLoading, setGitConfirmLoading] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanFolderFilter, setScanFolderFilter] = useState(ALL_SCAN_FOLDERS);
   const [scanLoading, setScanLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
@@ -570,15 +590,21 @@ export function InstallSkills() {
   };
 
   const handleImportAllDiscovered = async () => {
+    const sourcePaths =
+      scanFolderFilter === ALL_SCAN_FOLDERS ? undefined : pendingImportPaths;
     setImportingAll(true);
     try {
       try {
-        await api.importAllDiscovered();
+        await api.importAllDiscovered(sourcePaths);
       } catch (error: unknown) {
         toast.error(getErrorMessage(error, t("common.error")));
         return;
       }
-      toast.success(t("install.scan.importedAll"));
+      toast.success(
+        sourcePaths
+          ? t("install.scan.importedFiltered", { count: sourcePaths.length })
+          : t("install.scan.importedAll")
+      );
       const results = await Promise.allSettled([
         refreshPresets(),
         refreshManagedSkills(),
@@ -599,8 +625,68 @@ export function InstallSkills() {
     scrollMarketListToTop();
   };
 
-  const scanGroups = scanResult?.groups ?? [];
-  const pendingGroups = scanGroups.filter((group) => !group.imported);
+  const scanGroups = useMemo(() => scanResult?.groups ?? [], [scanResult]);
+  const scanFolderOptions = useMemo<ScanFolderOption[]>(() => {
+    const folderMap = new Map<string, ScanFolderOption>();
+
+    for (const group of scanGroups) {
+      const countedFolders = new Set<string>();
+      const countedPendingFolders = new Set<string>();
+
+      for (const location of group.locations) {
+        const folderPath = getScanFolderPath(location.found_path);
+        const option = folderMap.get(folderPath) ?? {
+          path: folderPath,
+          total: 0,
+          pending: 0,
+        };
+
+        if (!countedFolders.has(folderPath)) {
+          option.total += 1;
+          countedFolders.add(folderPath);
+        }
+        if (!group.imported && !countedPendingFolders.has(folderPath)) {
+          option.pending += 1;
+          countedPendingFolders.add(folderPath);
+        }
+
+        folderMap.set(folderPath, option);
+      }
+    }
+
+    return Array.from(folderMap.values()).sort(
+      (a, b) => b.total - a.total || a.path.localeCompare(b.path)
+    );
+  }, [scanGroups]);
+
+  useEffect(() => {
+    if (
+      scanFolderFilter !== ALL_SCAN_FOLDERS &&
+      !scanFolderOptions.some((option) => option.path === scanFolderFilter)
+    ) {
+      setScanFolderFilter(ALL_SCAN_FOLDERS);
+    }
+  }, [scanFolderFilter, scanFolderOptions]);
+
+  const filteredScanGroups = useMemo(() => {
+    if (scanFolderFilter === ALL_SCAN_FOLDERS) {
+      return scanGroups;
+    }
+
+    return scanGroups
+      .map((group) => ({
+        ...group,
+        locations: group.locations.filter(
+          (location) => getScanFolderPath(location.found_path) === scanFolderFilter
+        ),
+      }))
+      .filter((group) => group.locations.length > 0);
+  }, [scanFolderFilter, scanGroups]);
+
+  const pendingGroups = filteredScanGroups.filter((group) => !group.imported);
+  const pendingImportPaths = pendingGroups
+    .map((group) => group.locations[0]?.found_path)
+    .filter((path): path is string => Boolean(path));
   const sourceOptions = useMemo(
     () => Array.from(new Set(marketSkills.map((skill) => skill.source))),
     [marketSkills]
@@ -1287,12 +1373,85 @@ export function InstallSkills() {
                   ) : (
                     <DownloadCloud className="h-3.5 w-3.5" />
                   )}
-                  {t("install.scan.importAll")}
+                  {scanFolderFilter === ALL_SCAN_FOLDERS
+                    ? t("install.scan.importAll")
+                    : t("install.scan.importFiltered", { count: pendingGroups.length })}
                 </button>
               </div>
             </div>
 
             <div className="space-y-4 p-4">
+              {!scanLoading && scanResult && scanFolderOptions.length > 0 ? (
+                <div className="space-y-3 border-b border-border-subtle pb-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-[13px] font-semibold text-secondary">
+                        {t("install.scan.folderFilter")}
+                      </h3>
+                      <p className="mt-0.5 text-[13px] text-muted">
+                        {t("install.scan.folderFilterSummary", {
+                          folders: scanFolderOptions.length,
+                          skills: scanGroups.length,
+                        })}
+                      </p>
+                    </div>
+                    {scanFolderFilter !== ALL_SCAN_FOLDERS ? (
+                      <button
+                        type="button"
+                        onClick={() => setScanFolderFilter(ALL_SCAN_FOLDERS)}
+                        className="shrink-0 rounded-md p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+                        title={t("install.scan.clearFolderFilter")}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setScanFolderFilter(ALL_SCAN_FOLDERS)}
+                      className={cn(
+                        "inline-flex items-center gap-2 rounded-[6px] border px-2.5 py-1.5 text-[13px] transition-colors",
+                        scanFolderFilter === ALL_SCAN_FOLDERS
+                          ? "border-accent-border bg-accent-bg text-accent-light"
+                          : "border-border-subtle bg-background text-tertiary hover:bg-surface-hover"
+                      )}
+                    >
+                      <FolderSearch className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t("install.scan.allFolders")}</span>
+                      <span className="rounded-full border border-current/20 px-1.5 py-px text-[11px]">
+                        {t("install.scan.folderSkillCount", { count: scanGroups.length })}
+                      </span>
+                    </button>
+
+                    {scanFolderOptions.map((option) => {
+                      const selected = scanFolderFilter === option.path;
+                      return (
+                        <button
+                          key={option.path}
+                          type="button"
+                          onClick={() => setScanFolderFilter(option.path)}
+                          className={cn(
+                            "inline-flex max-w-full items-center gap-2 rounded-[6px] border px-2.5 py-1.5 text-[13px] transition-colors sm:max-w-[36rem]",
+                            selected
+                              ? "border-accent-border bg-accent-bg text-accent-light"
+                              : "border-border-subtle bg-background text-tertiary hover:bg-surface-hover"
+                          )}
+                          title={option.path}
+                        >
+                          <FolderInput className="h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 truncate">{option.path}</span>
+                          <span className="shrink-0 rounded-full border border-current/20 px-1.5 py-px text-[11px]">
+                            {t("install.scan.folderSkillCount", { count: option.total })}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
               {scanLoading ? (
                 <div className="flex items-center justify-center gap-2.5 py-12 text-muted">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1308,10 +1467,19 @@ export function InstallSkills() {
                   </h3>
                   <p className="text-[13px] text-muted">{t("install.scan.noResultsHint")}</p>
                 </div>
+              ) : scanResult && filteredScanGroups.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface-hover">
+                    <FolderInput className="h-5 w-5 text-muted" />
+                  </div>
+                  <h3 className="mb-1 text-[13px] font-semibold text-tertiary">
+                    {t("install.scan.noFolderResults")}
+                  </h3>
+                </div>
               ) : (
                 <>
                   <div className="app-panel-muted overflow-hidden">
-                    {scanGroups.map((group) => {
+                    {filteredScanGroups.map((group) => {
                       const [primaryLocation, ...otherLocations] = group.locations;
                       const primaryPath = primaryLocation?.found_path;
                       const isImporting = !!primaryPath && importingPaths.has(primaryPath);
@@ -1324,7 +1492,7 @@ export function InstallSkills() {
                       });
 
                       return (
-                        <article key={group.name} className="border-b border-border-subtle last:border-b-0">
+                        <article key={`${group.name}:${group.fingerprint ?? primaryPath ?? ""}`} className="border-b border-border-subtle last:border-b-0">
                           <div className="flex items-start justify-between gap-3 px-3 py-2">
                             <div className="min-w-0 flex-1 space-y-1.5">
                               <div className="flex min-w-0 items-center gap-2">
