@@ -236,6 +236,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("enabled");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
@@ -349,6 +350,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     setPullConfirmSkill(null);
     setDeleteLocalConfirmSkill(null);
     setLocalToggleKey(null);
+    setFilterMode("enabled");
     setTagFilters(new Set());
     setSourceFilters(new Set());
   }, [currentTool?.key]);
@@ -393,6 +395,8 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           if (!matchUntagged && !matchTag) return false;
         }
         if (sourceFilters.size > 0 && !sourceFilters.has(getSkillSourceKey(skill))) return false;
+        if (filterMode === "enabled" && !skill.enabled) return false;
+        if (filterMode === "disabled" && skill.enabled) return false;
         return true;
       })
       .sort((a, b) => {
@@ -408,12 +412,18 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           a.name.localeCompare(b.name)
         );
       });
-  }, [localSkills, search, tagFilters, sourceFilters]);
+  }, [localSkills, search, tagFilters, sourceFilters, filterMode]);
 
   const inSyncLocalCount = useMemo(
     () => localSkills.filter((skill) => skill.sync_status === "in_sync").length,
     [localSkills]
   );
+  const enabledLocalCount = useMemo(
+    () => localSkills.filter((skill) => skill.enabled).length,
+    [localSkills]
+  );
+  const disabledLocalCount = localSkills.length - enabledLocalCount;
+  const isCodexAgent = currentTool?.key === "codex";
 
   const installedIds = useMemo(() => new Set(agentSkills.map((s) => s.id)), [agentSkills]);
 
@@ -509,6 +519,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
           count: result.disabled_count,
           groups: result.duplicate_groups,
         }));
+        if (currentTool.key === "codex") {
+          toast.info(t("globalWorkspace.localSkills.restartNotice"));
+        }
       } else {
         toast.info(t("globalWorkspace.localSkills.dedupeNoop"));
       }
@@ -541,6 +554,9 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             { name: skill.name, agent: currentTool.display_name }
           )
         );
+        if (currentTool.key === "codex") {
+          toast.info(t("globalWorkspace.localSkills.restartNotice"));
+        }
         await loadLocalSkills();
       } catch (error: unknown) {
         toast.error(getErrorMessage(error, t("common.error")));
@@ -872,6 +888,21 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             </div>
 
             <div className="app-segmented shrink-0">
+              {(["all", "enabled", "disabled"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setFilterMode(mode)}
+                  className={cn(
+                    "app-segmented-button",
+                    filterMode === mode && "app-segmented-button-active"
+                  )}
+                >
+                  {t(`project.filters.${mode}`)}
+                </button>
+              ))}
+            </div>
+
+            <div className="app-segmented shrink-0">
               <button
                 onClick={() => void loadLocalSkills()}
                 disabled={localSkillsLoading}
@@ -925,6 +956,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
             </button>
           </div>
         </div>
+
+        {isCodexAgent && (
+          <div className="rounded-lg border border-border-subtle bg-surface-hover px-3 py-2 text-[12.5px] text-muted">
+            {t("globalWorkspace.localSkills.codexLoadSummary", {
+              enabled: enabledLocalCount,
+              disabled: disabledLocalCount,
+              library: managedSkills.length,
+            })}
+          </div>
+        )}
 
         {sourceOptions.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">

@@ -825,6 +825,8 @@
       "searchPlaceholder": "搜尋 Agent Skills…",
       "empty": "未發現本機 Skills",
       "summary": "{{total}} / {{managed}} 個受管理 / {{synced}} 個已同步",
+      "codexLoadSummary": "Codex 目前只會從啟用目錄載入 {{enabled}} 個 Skill；{{disabled}} 個已停用。Skills 中心的 {{library}} 個 Skill 只是倉庫庫存，不會被 Codex 預載入。啟停或清理後需要重啟 Codex 新會話才會生效。",
+      "restartNotice": "Codex 已啟動的會話不會熱更新 Skills；請重啟 Codex 新會話後查看載入數量。",
       "enable": "啟用",
       "disable": "停用",
       "dedupe": "清理重複",

@@ -909,6 +909,8 @@
       "searchPlaceholder": "搜索 Agent Skills…",
       "empty": "未发现本地 Skills",
       "summary": "{{total}} / {{managed}} 个受管理 / {{synced}} 个已同步",
+      "codexLoadSummary": "Codex 当前只会从启用目录加载 {{enabled}} 个 Skill；{{disabled}} 个已停用。Skills 中心的 {{library}} 个 Skill 只是仓库库存，不会被 Codex 预加载。启停或清理后需要重启 Codex 新会话才会生效。",
+      "restartNotice": "Codex 已启动的会话不会热更新 Skills；请重启 Codex 新会话后查看加载数量。",
       "enable": "启用",
       "disable": "停用",
       "dedupe": "清理重复",

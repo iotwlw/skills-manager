@@ -909,6 +909,8 @@
       "searchPlaceholder": "Search agent skills...",
       "empty": "No local skills found",
       "summary": "{{total}} / {{managed}} managed / {{synced}} in sync",
+      "codexLoadSummary": "Codex only loads {{enabled}} skill(s) from the enabled directory; {{disabled}} are disabled. The {{library}} skill(s) in Skills Center are library inventory and are not preloaded by Codex. Restart a new Codex session after enabling, disabling, or cleaning skills.",
+      "restartNotice": "Running Codex sessions do not hot-reload skills. Restart a new Codex session to see the reduced loaded count.",
       "enable": "Enable",
       "disable": "Disable",
       "dedupe": "Clean Duplicates",

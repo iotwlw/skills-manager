@@ -174,7 +174,7 @@ export function ProjectDetail() {
   const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
+  const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("enabled");
   const [search, setSearch] = useState("");
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
@@ -256,6 +256,13 @@ export function ProjectDetail() {
       navigate("/");
     }
   }, [project, loading, navigate]);
+
+  useEffect(() => {
+    setFilterMode("enabled");
+    setTagFilters(new Set());
+    setSourceFilters(new Set());
+    setSearch("");
+  }, [id]);
 
   const groupedSkills = useMemo<ProjectSkillGroup[]>(() => {
     const groups = new Map<string, ProjectSkillGroup>();
