@@ -244,6 +244,7 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
   const [localSkills, setLocalSkills] = useState<ProjectSkill[]>([]);
   const [localSkillsLoading, setLocalSkillsLoading] = useState(false);
   const [localActionKey, setLocalActionKey] = useState<string | null>(null);
+  const [dedupingLocalDuplicates, setDedupingLocalDuplicates] = useState(false);
   const [localToggleKey, setLocalToggleKey] = useState<string | null>(null);
   const [localDetailSkill, setLocalDetailSkill] = useState<ProjectSkill | null>(null);
   const [localDocContent, setLocalDocContent] = useState<string | null>(null);
@@ -431,6 +432,16 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     [localSkills, managedLocalIds]
   );
 
+  const duplicateLocalNameCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const skill of localSkills) {
+      if (!skill.enabled) continue;
+      const key = skill.name.trim().toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Array.from(counts.values()).filter((count) => count > 1).length;
+  }, [localSkills]);
+
   const handleRemoveLocalManagedSkill = async (skill: ProjectSkill) => {
     if (!agentKey || !skill.center_skill_id || !managedLocalIds.has(skill.center_skill_id)) return;
     setRemovingLocalSkillId(skill.relative_path);
@@ -486,6 +497,34 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
     },
     [currentTool, loadLocalSkills, t]
   );
+
+  const handleDedupeLocalSkills = useCallback(async () => {
+    if (!currentTool || dedupingLocalDuplicates) return;
+    setDedupingLocalDuplicates(true);
+    try {
+      const result = await api.dedupeGlobalLocalSkills(currentTool.key);
+      await Promise.all([loadLocalSkills(), refreshManagedSkills(), refreshTools()]);
+      if (result.disabled_count > 0) {
+        toast.success(t("globalWorkspace.localSkills.dedupeToast", {
+          count: result.disabled_count,
+          groups: result.duplicate_groups,
+        }));
+      } else {
+        toast.info(t("globalWorkspace.localSkills.dedupeNoop"));
+      }
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      setDedupingLocalDuplicates(false);
+    }
+  }, [
+    currentTool,
+    dedupingLocalDuplicates,
+    loadLocalSkills,
+    refreshManagedSkills,
+    refreshTools,
+    t,
+  ]);
 
   const handleToggleLocalSkill = useCallback(
     async (skill: ProjectSkill, enabled: boolean) => {
@@ -860,6 +899,22 @@ export function WorkspaceView({ config }: { config: WorkspaceConfig }) {
                 <List className="h-4 w-4" />
               </button>
             </div>
+
+            {duplicateLocalNameCount > 0 && (
+              <button
+                onClick={() => void handleDedupeLocalSkills()}
+                disabled={dedupingLocalDuplicates}
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border-subtle px-3 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+                title={t("globalWorkspace.localSkills.dedupeHint")}
+              >
+                {dedupingLocalDuplicates ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CircleSlash className="h-3.5 w-3.5" />
+                )}
+                {t("globalWorkspace.localSkills.dedupe")}
+              </button>
+            )}
 
             <button
               onClick={() => setAddDialogOpen(true)}

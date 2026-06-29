@@ -703,6 +703,14 @@ export const slugifySkillNames = (names: string[]) =>
 export const getGlobalLocalSkills = (agent: string) =>
   invoke<ProjectSkill[]>("get_global_local_skills", { agent });
 
+export interface DedupeAgentLocalSkillsResult {
+  disabled_count: number;
+  duplicate_groups: number;
+}
+
+export const dedupeGlobalLocalSkills = (agent: string) =>
+  invoke<DedupeAgentLocalSkillsResult>("dedupe_global_local_skills", { agent });
+
 export const getGlobalLocalSkillDocument = (agent: string, skillRelativePath: string) =>
   invoke<ProjectSkillDocument>("get_global_local_skill_document", { agent, skillRelativePath });
 

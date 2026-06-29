@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Serialize;
 use tauri::State;
 
 use crate::commands::projects::{
@@ -174,6 +176,21 @@ pub async fn get_global_local_skills(
     .await?
 }
 
+#[derive(Debug, Serialize)]
+pub struct DedupeAgentLocalSkillsResult {
+    pub disabled_count: usize,
+    pub duplicate_groups: usize,
+}
+
+#[tauri::command]
+pub async fn dedupe_global_local_skills(
+    store: State<'_, Arc<SkillStore>>,
+    agent: String,
+) -> Result<DedupeAgentLocalSkillsResult, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || dedupe_agent_local_skills(&store, &agent)).await?
+}
+
 #[tauri::command]
 pub async fn get_global_local_skill_document(
     store: State<'_, Arc<SkillStore>>,
@@ -341,6 +358,107 @@ fn import_agent_local_skill_to_center(
         return Err(err);
     }
     Ok(())
+}
+
+fn dedupe_agent_local_skills(
+    store: &SkillStore,
+    agent: &str,
+) -> Result<DedupeAgentLocalSkillsResult, AppError> {
+    let adapter = adapter_for_agent(store, agent)?;
+    let skills_root = adapter.skills_dir();
+    let disabled_root = agent_disabled_skills_dir(&adapter);
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    let local_skills = read_agent_local_skills(&adapter);
+
+    let mut groups: HashMap<(String, String), Vec<project_scanner::ProjectSkillInfo>> =
+        HashMap::new();
+    for skill in local_skills.into_iter().filter(|skill| skill.enabled) {
+        let Some(hash) = skill.content_hash.clone() else {
+            continue;
+        };
+        groups
+            .entry((skill.name.to_lowercase(), hash))
+            .or_default()
+            .push(skill);
+    }
+
+    let mut disabled_count = 0usize;
+    let mut duplicate_groups = 0usize;
+
+    for skills in groups.values() {
+        if skills.len() < 2 {
+            continue;
+        }
+
+        let Some(keep_index) = preferred_duplicate_keep_index(skills, &all_targets) else {
+            continue;
+        };
+
+        let mut disabled_in_group = 0usize;
+        for (index, skill) in skills.iter().enumerate() {
+            if index == keep_index || target_records_include_skill(skill, &all_targets) {
+                continue;
+            }
+
+            set_project_skill_enabled_state(
+                &skills_root,
+                &disabled_root,
+                &skill.relative_path,
+                false,
+            )?;
+            disabled_in_group += 1;
+        }
+
+        if disabled_in_group > 0 {
+            duplicate_groups += 1;
+            disabled_count += disabled_in_group;
+        }
+    }
+
+    Ok(DedupeAgentLocalSkillsResult {
+        disabled_count,
+        duplicate_groups,
+    })
+}
+
+fn preferred_duplicate_keep_index(
+    skills: &[project_scanner::ProjectSkillInfo],
+    all_targets: &[SkillTargetRecord],
+) -> Option<usize> {
+    if let Some((index, _)) = skills
+        .iter()
+        .enumerate()
+        .find(|(_, skill)| target_records_include_skill(skill, all_targets))
+    {
+        return Some(index);
+    }
+
+    skills
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, skill)| duplicate_preference_key(skill))
+        .map(|(index, _)| index)
+}
+
+fn duplicate_preference_key(skill: &project_scanner::ProjectSkillInfo) -> (usize, String) {
+    let dir_name = skill
+        .relative_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&skill.relative_path);
+    (
+        usize::from(dir_name.starts_with("gstack-")),
+        skill.relative_path.to_lowercase(),
+    )
+}
+
+fn target_records_include_skill(
+    skill: &project_scanner::ProjectSkillInfo,
+    all_targets: &[SkillTargetRecord],
+) -> bool {
+    all_targets.iter().any(|target| {
+        target.tool == skill.agent && target_path_equals_skill(&target.target_path, &skill.path)
+    })
 }
 
 /// Repair "stranded" center skills left behind by uploads that predate the
@@ -558,12 +676,12 @@ fn delete_agent_local_skill(
 #[cfg(test)]
 mod tests {
     use super::{
-        backfill_stranded_agent_targets, enrich_center_status, import_agent_local_skill_to_center,
-        update_agent_local_skill_from_center,
+        backfill_stranded_agent_targets, dedupe_agent_local_skills, enrich_center_status,
+        import_agent_local_skill_to_center, update_agent_local_skill_from_center,
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
-    use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore, SkillTargetRecord};
     use crate::core::{central_repo, installer};
     use std::collections::HashMap;
 
@@ -703,6 +821,90 @@ mod tests {
             enriched[0].tags,
             vec!["create".to_string(), "manage".to_string()]
         );
+    }
+
+    #[test]
+    fn dedupe_agent_local_skills_disables_unmanaged_same_hash_duplicate() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let skills_root = temp.path().join("agent-skills");
+        let disabled_root = temp.path().join("agent-skills-disabled");
+        let managed_dir = skills_root.join("autoplan");
+        let legacy_dir = skills_root.join("gstack-autoplan");
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let content = "---\nname: autoplan\ndescription: Same skill\n---\nbody\n";
+        std::fs::write(managed_dir.join("SKILL.md"), content).unwrap();
+        std::fs::write(legacy_dir.join("SKILL.md"), content).unwrap();
+
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([
+                    {
+                        "key": "test_agent",
+                        "display_name": "Test Agent",
+                        "skills_dir": skills_root.to_string_lossy(),
+                        "project_relative_skills_dir": ".test-agent/skills"
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let hash = content_hash::hash_directory(&managed_dir).unwrap();
+        store
+            .insert_skill(&SkillRecord {
+                id: "center-autoplan".to_string(),
+                name: "autoplan".to_string(),
+                description: Some("Same skill".to_string()),
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: managed_dir.to_string_lossy().to_string(),
+                content_hash: Some(hash.clone()),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-autoplan".to_string(),
+                skill_id: "center-autoplan".to_string(),
+                tool: "test_agent".to_string(),
+                target_path: managed_dir.to_string_lossy().to_string(),
+                mode: "symlink".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(now),
+                last_error: None,
+                source_hash: Some(hash),
+            })
+            .unwrap();
+
+        let result = dedupe_agent_local_skills(&store, "test_agent").unwrap();
+
+        assert_eq!(result.disabled_count, 1);
+        assert_eq!(result.duplicate_groups, 1);
+        assert!(managed_dir.is_dir());
+        assert!(!legacy_dir.exists());
+        assert!(disabled_root.join("gstack-autoplan").is_dir());
+
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]
