@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "781bd6d3f9b19f8c9af6b53d8d0e4876d0183841b565db34ca7092ffa412d111"
+    },
+    "search-skill": {
+      "source": "gbsoss/skill-from-masters",
+      "sourceType": "github",
+      "skillPath": "skills/search-skill/SKILL.md",
+      "computedHash": "34bb27d65015f3aeb702dd1509dfb271ac466b8f86c112c51ebe965cfc71c5a6"
+    },
+    "skill-from-github": {
+      "source": "gbsoss/skill-from-masters",
+      "sourceType": "github",
+      "skillPath": "skills/skill-from-github/SKILL.md",
+      "computedHash": "536ca8b9df9f857ed9c829f8e301b08b2d54c17eb74bd551c9f113678360c342"
+    }
+  }
+}
