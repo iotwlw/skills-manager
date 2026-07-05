@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>项目 Skills 使用说明</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f2;
+        --surface: #ffffff;
+        --surface-muted: #eef3ee;
+        --text: #20231f;
+        --muted: #62685f;
+        --line: #d8ded4;
+        --green: #19735b;
+        --green-dark: #105241;
+        --amber: #b66a15;
+        --rose: #b84b55;
+        --ink: #2d3440;
+        --code-bg: #1f2522;
+        --code-text: #edf5ee;
+        --shadow: 0 18px 48px rgba(31, 37, 34, 0.11);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(246, 247, 242, 0.96)),
+          var(--bg);
+        color: var(--text);
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Segoe UI",
+          system-ui,
+          -apple-system,
+          sans-serif;
+        line-height: 1.65;
+      }
+
+      a {
+        color: var(--green-dark);
+        text-decoration-thickness: 2px;
+        text-underline-offset: 3px;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .side {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 32px 24px;
+        border-right: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        backdrop-filter: blur(12px);
+      }
+
+      .mark {
+        display: inline-grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border: 2px solid var(--green);
+        border-radius: 8px;
+        color: var(--green);
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .side h1 {
+        margin: 18px 0 8px;
+        font-size: 24px;
+        line-height: 1.22;
+        letter-spacing: 0;
+      }
+
+      .side p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .nav {
+        display: grid;
+        gap: 6px;
+        margin-top: 28px;
+      }
+
+      .nav a {
+        display: block;
+        padding: 9px 10px;
+        border-radius: 7px;
+        color: var(--ink);
+        font-size: 14px;
+        text-decoration: none;
+      }
+
+      .nav a:hover {
+        background: var(--surface-muted);
+      }
+
+      main {
+        min-width: 0;
+        padding: 44px clamp(22px, 5vw, 72px) 64px;
+      }
+
+      .hero {
+        display: grid;
+        gap: 18px;
+        max-width: 1040px;
+        margin-bottom: 32px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface);
+        color: var(--green-dark);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .hero h2 {
+        margin: 0;
+        max-width: 820px;
+        font-size: clamp(34px, 5vw, 58px);
+        line-height: 1.06;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        max-width: 780px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 18px;
+      }
+
+      .quick-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        max-width: 1040px;
+        margin: 28px 0 38px;
+      }
+
+      .quick-card {
+        min-height: 150px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .quick-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+
+      .quick-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .tag {
+        display: inline-flex;
+        width: fit-content;
+        margin-bottom: 12px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .tag.green {
+        background: #e2f1e9;
+        color: var(--green-dark);
+      }
+
+      .tag.amber {
+        background: #fff0d8;
+        color: var(--amber);
+      }
+
+      .tag.rose {
+        background: #ffe4e8;
+        color: var(--rose);
+      }
+
+      section {
+        max-width: 1040px;
+        padding: 30px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      section h2 {
+        margin: 0 0 14px;
+        font-size: 28px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      section h3 {
+        margin: 28px 0 10px;
+        font-size: 21px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      section p {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        min-width: 720px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--surface-muted);
+        color: var(--ink);
+        font-size: 14px;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 5px;
+        background: #e8ece6;
+        color: #19362f;
+        font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92em;
+      }
+
+      pre {
+        overflow-x: auto;
+        margin: 12px 0 20px;
+        padding: 16px;
+        border-radius: 8px;
+        background: var(--code-bg);
+        color: var(--code-text);
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 14px;
+      }
+
+      .command-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .command-item {
+        display: grid;
+        grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .command-item span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .command-item pre {
+        margin: 0;
+      }
+
+      .notes {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .notes li {
+        padding: 13px 15px;
+        border-left: 4px solid var(--green);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--muted);
+      }
+
+      .footer {
+        max-width: 1040px;
+        padding-top: 24px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 860px) {
+        .shell {
+          display: block;
+        }
+
+        .side {
+          position: static;
+          height: auto;
+          padding: 22px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .nav {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        main {
+          padding: 30px 18px 48px;
+        }
+
+        .quick-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .command-item {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .nav {
+          grid-template-columns: 1fr;
+        }
+
+        .hero h2 {
+          font-size: 34px;
+        }
+
+        .hero p {
+          font-size: 16px;
+        }
+
+        section h2 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="side">
+        <div class="mark">SK</div>
+        <h1>项目 Skills 使用说明</h1>
+        <p>本页说明当前项目安装的 skill、典型使用场景、维护命令和安全约定。</p>
+        <nav class="nav" aria-label="页面导航">
+          <a href="#installed">已安装</a>
+          <a href="#when">什么时候使用</a>
+          <a href="#commands">本地命令</a>
+          <a href="#maintenance">维护约定</a>
+        </nav>
+      </aside>
+
+      <main>
+        <header class="hero">
+          <div class="eyebrow">项目级 agent skills</div>
+          <h2>查找、筛选并从开源项目沉淀可复用 Skill</h2>
+          <p>
+            本项目已通过 <code>skills</code> CLI 安装 3 个项目级 skill。安装记录保存在
+            <code>skills-lock.json</code>，实际文件位于 <code>.agents/skills/</code>。
+          </p>
+        </header>
+
+        <div class="quick-grid" aria-label="Skill 概览">
+          <article class="quick-card">
+            <span class="tag green">发现</span>
+            <strong>find-skills</strong>
+            <p>在开放 agent skills 生态中查找、对比和安装可用 skill。</p>
+          </article>
+          <article class="quick-card">
+            <span class="tag amber">筛选</span>
+            <strong>search-skill</strong>
+            <p>从可信 marketplace 和 curated 列表中搜索并推荐 Claude Code / agent skills。</p>
+          </article>
+          <article class="quick-card">
+            <span class="tag rose">沉淀</span>
+            <strong>skill-from-github</strong>
+            <p>先搜索高质量 GitHub 项目，再深入理解项目做法，并把知识沉淀成新的 skill。</p>
+          </article>
+        </div>
+
+        <section id="installed">
+          <h2>已安装的 Skill</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Skill</th>
+                  <th>来源</th>
+                  <th>用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>find-skills</code></td>
+                  <td><code>vercel-labs/skills</code></td>
+                  <td>在开放 agent skills 生态中查找、对比和安装可用 skill。</td>
+                </tr>
+                <tr>
+                  <td><code>search-skill</code></td>
+                  <td><code>gbsoss/skill-from-masters</code></td>
+                  <td>从可信 marketplace 和 curated 列表中搜索并推荐 Claude Code / agent skills。</td>
+                </tr>
+                <tr>
+                  <td><code>skill-from-github</code></td>
+                  <td><code>gbsoss/skill-from-masters</code></td>
+                  <td>先搜索高质量 GitHub 项目，再深入理解项目做法，并把知识沉淀成新的 skill。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="when">
+          <h2>什么时候使用</h2>
+
+          <h3><code>find-skills</code></h3>
+          <p>适合泛化的 skill 查找场景，例如：</p>
+          <pre><code>帮我找一个可以做前端设计审查的 skill
+有没有能自动生成 changelog 的 skill
+找一个适合 Playwright 测试的 agent skill</code></pre>
+          <p>
+            它会优先使用 <code>skills.sh</code> 和 <code>npx skills find</code>
+            搜索生态内已有 skill，并在推荐前检查安装量、来源和仓库可信度。
+          </p>
+
+          <h3><code>search-skill</code></h3>
+          <p>适合需要更严格筛选来源的 skill 搜索场景，例如：</p>
+          <pre><code>用 search-skill 帮我找可信的浏览器自动化 skill
+搜索能做安全审计的 Claude Code skill
+从官方或 curated marketplace 里找一个文档处理 skill</code></pre>
+          <p>
+            它的默认策略是先查官方或高信任来源，再查社区 curated 列表和 marketplace，并过滤低星、长期不维护、缺少
+            <code>SKILL.md</code> 或存在可疑代码模式的结果。
+          </p>
+
+          <h3><code>skill-from-github</code></h3>
+          <p>适合“先学习优秀开源项目，再创建新 skill”的场景，例如：</p>
+          <pre><code>用 skill-from-github 学习几个优秀的 markdown 转 PDF 项目，然后帮我设计一个 skill
+我想做一个 API 文档生成 skill，先从 GitHub 找成熟项目参考
+研究一下高质量 sentiment analysis 项目，把方法沉淀成可复用 skill</code></pre>
+          <p>
+            它会按任务关键词搜索 GitHub，优先选择 star 数高、最近 12
+            个月仍维护、README 清晰且有实际代码的项目。进入深度分析和创建 skill 前，应先让用户确认候选项目和总结方向。
+          </p>
+        </section>
+
+        <section id="commands">
+          <h2>本地命令</h2>
+          <div class="command-list">
+            <div class="command-item">
+              <span>查看项目已安装 skill</span>
+              <pre><code>npx skills ls --json</code></pre>
+            </div>
+            <div class="command-item">
+              <span>按关键词搜索可安装 skill</span>
+              <pre><code>npx skills find "browser automation"</code></pre>
+            </div>
+            <div class="command-item">
+              <span>安装新的项目级 skill</span>
+              <pre><code>npx skills add owner/repo@skill-name -y</code></pre>
+            </div>
+            <div class="command-item">
+              <span>更新项目已安装 skill</span>
+              <pre><code>npx skills update -p -y</code></pre>
+            </div>
+            <div class="command-item">
+              <span>从锁文件恢复项目 skill</span>
+              <pre><code>npx skills experimental_install</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="maintenance">
+          <h2>维护约定</h2>
+          <ul class="notes">
+            <li>修改或新增项目级 skill 后，提交 <code>.agents/skills/</code> 和 <code>skills-lock.json</code>。</li>
+            <li>
+              安装外部 skill 后先阅读对应 <code>SKILL.md</code>，确认它没有要求访问敏感路径、读取密钥、执行动态代码或修改系统文件。
+            </li>
+            <li>对搜索类 skill 的结果保持审查：优先选择官方、高安装量、高 star、近期维护的来源。</li>
+            <li>
+              <code>skill-from-github</code>
+              用于学习和抽象方法，不应直接把第三方项目代码复制进新 skill；如引用项目经验，应保留来源和许可证信息。
+            </li>
+          </ul>
+        </section>
+
+        <p class="footer">HTML 版本由 <code>SKILLS_USAGE.zh-CN.md</code> 转写，适合直接通过浏览器打开阅读。</p>
+      </main>
+    </div>
+  </body>
+</html>
