@@ -132,6 +132,24 @@ test("help 完整列出机器输出和 context 参数", async (t) => {
   assert.match(result.payload, /adopt TARGET .*\[--branch NAME\] \[--subpath PATH\]/);
 });
 
+test("CLI 通过父级 Junction 调用时仍会执行主入口", async (t) => {
+  const env = await fixture(t);
+  const skillRoot = fileURLToPath(new URL("../", import.meta.url));
+  const aliasRoot = path.join(env.root, "installed-skill-forklift");
+  await fsp.symlink(
+    skillRoot,
+    aliasRoot,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const result = spawnSync(
+    process.execPath,
+    [path.join(aliasRoot, "scripts", "forklift.mjs"), "help", "--json"],
+    { cwd: env.root, encoding: "utf8", windowsHide: true },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(JSON.parse(result.stdout), /Skill 叉车/);
+});
+
 test("安装、全局映射、报告与解除映射形成完整闭环", async (t) => {
   const env = await fixture(t);
   const sourceRoot = path.join(env.root, "sources");
