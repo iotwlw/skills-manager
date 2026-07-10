@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "warehouse": "~/.skills-manager/skills",
+  "globalTarget": "~/.codex/skills",
+  "codexConfig": "~/.codex/config.toml",
+  "reportPath": "./skill-forklift-report.html",
+  "globalSkills": [],
+  "projects": [
+    {
+      "id": "example-project",
+      "name": "示例项目",
+      "path": "E:/Code/example-project",
+      "skillsDir": ".codex/skills",
+      "skills": []
+    }
+  ],
+  "catalog": {}
+}

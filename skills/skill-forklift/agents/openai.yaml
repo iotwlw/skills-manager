@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill 叉车"
+  short_description: "轻量管理 Codex 全局与项目 Skill 映射"
+  default_prompt: "使用 $skill-forklift 盘点当前 Codex Skills，并生成独立 HTML 管理报告。"

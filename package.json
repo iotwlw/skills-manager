@@ -16,7 +16,9 @@
     "tauri:build": "tauri build",
     "cli": "node scripts/run-rust-cli.mjs cli",
     "cli:build": "node scripts/run-rust-cli.mjs build",
-    "cli:install": "node scripts/run-rust-cli.mjs install"
+    "cli:install": "node scripts/run-rust-cli.mjs install",
+    "forklift": "node skills/skill-forklift/scripts/forklift.mjs",
+    "forklift:test": "node --test skills/skill-forklift/scripts/forklift.test.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
