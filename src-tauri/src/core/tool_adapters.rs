@@ -188,17 +188,10 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: Some(".omp/skills".into()),
         },
         ToolAdapter {
-            // Codex CLI reads user-level skills from `~/.codex/skills/` and
-            // project-level skills from `<repo>/.codex/skills/`. The shared
-            // `~/.agents/skills` location is kept as a discovery fallback so
-            // skills synced there by other adapters (or by older skills-manager
-            // versions that deployed Codex there by mistake) still surface in
-            // the Codex tab.
-            //
-            // Note: `AGENT_SKILLS_PATH` (openai/codex#13074) is a proposed
-            // env var that would let Codex load from `<custom>/.agents/skills`;
-            // until it ships, `.codex/skills` is the only path Codex CLI
-            // actually reads.
+            // 当前官方说明使用用户/项目的 .agents/skills；保留 .codex/skills
+            // 作为本管理器的历史部署默认，避免升级时隐式迁移已有分配。
+            // 全局发现同时扫描 .agents/skills；项目部署路径可在设置中显式覆盖。
+            // https://learn.chatgpt.com/docs/customization/overview#skills
             key: "codex".into(),
             display_name: "Codex".into(),
             relative_skills_dir: ".codex/skills".into(),

@@ -114,12 +114,12 @@ fn linked_workspace_agent_name(rec: &ProjectRecord) -> String {
         .unwrap_or_else(|| rec.name.clone())
 }
 
-fn codex_project_skill_config() -> project_scanner::AgentSkillConfig {
-    project_scanner::AgentSkillConfig {
+fn codex_project_skill_configs() -> Vec<project_scanner::AgentSkillConfig> {
+    [".agents/skills", ".codex/skills"].into_iter().map(|relative| project_scanner::AgentSkillConfig {
         key: "codex".to_string(),
         display_name: "Codex".to_string(),
-        relative_skills_dir: ".codex/skills".to_string(),
-    }
+        relative_skills_dir: relative.to_string(),
+    }).collect()
 }
 
 fn codex_config_path() -> Option<PathBuf> {
@@ -235,14 +235,18 @@ fn discover_codex_project_paths() -> Result<Vec<PathBuf>, AppError> {
 }
 
 fn codex_project_dto(path: &Path, imported: bool) -> CodexProjectDto {
-    let config = codex_project_skill_config();
-    let skills = project_scanner::read_project_skills(path, &[config]);
+    // 仅用于发现统计；部署仍按显式配置的单一根目录执行。
+    let configs = codex_project_skill_configs();
+    let skills = project_scanner::read_project_skills(path, &configs);
+    let distinct_paths: std::collections::HashSet<_> = skills.iter().map(|skill| {
+        std::fs::canonicalize(&skill.path).unwrap_or_else(|_| PathBuf::from(&skill.path))
+    }).collect();
     CodexProjectDto {
         name: project_display_name(path),
         path: path.to_string_lossy().to_string(),
         imported,
-        has_codex_skills: path.join(".codex").join("skills").is_dir(),
-        skill_count: skills.len(),
+        has_codex_skills: configs.iter().any(|config| path.join(&config.relative_skills_dir).is_dir()),
+        skill_count: distinct_paths.len(),
     }
 }
 
@@ -1388,6 +1392,33 @@ mod tests {
     use crate::core::skill_store::SkillRecord;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn codex_discovery_counts_current_and_legacy_roots() {
+        let project = tempdir().unwrap();
+        let shared = project.path().join(".agents/skills/current");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("SKILL.md"), "---\nname: current\ndescription: 共享目录技能\n---\n").unwrap();
+        let current = super::codex_project_dto(project.path(), false);
+        assert!(current.has_codex_skills);
+        assert_eq!(current.skill_count, 1);
+        let legacy = project.path().join(".codex/skills/legacy");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("SKILL.md"), "---\nname: legacy\ndescription: 历史目录技能\n---\n").unwrap();
+        assert_eq!(super::codex_project_dto(project.path(), true).skill_count, 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_discovery_deduplicates_junction_aliases() {
+        let project = tempdir().unwrap();
+        let legacy = project.path().join(".codex/skills/sample");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("SKILL.md"), "---\nname: sample\ndescription: 同一份技能\n---\n").unwrap();
+        fs::create_dir_all(project.path().join(".agents")).unwrap();
+        junction::create(project.path().join(".codex/skills"), project.path().join(".agents/skills")).unwrap();
+        assert_eq!(super::codex_project_dto(project.path(), false).skill_count, 1);
+    }
 
     fn sample_managed_skill(
         central_path: String,

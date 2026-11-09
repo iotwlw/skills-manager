@@ -8,6 +8,8 @@
 
 升级将现有安装、收藏、预设、全局/项目分配、上游更新、Git 快照恢复串联到新增的治理检查入口。新增核心由桌面和 CLI 共用；直接扫描实际文件，不以数据库显示的“已同步”代替内容校验。Forklift 的 context 仍只管理它自己的 Codex 分配，桌面的多工具分配仍由原有模型管理，不相互隐式覆盖。
 
+Codex 当前官方推荐用户/项目的 `.agents/skills`。本管理器继续兼容已有 `.codex/skills` 部署，全局发现也包含 `.agents/skills`；Codex 项目发现统计同时识别两种目录，并按实际位置去重。需要改变项目部署目录时，在设置中显式覆盖路径。此次升级不自动迁移现有链接。
+
 ## 新增使用流程
 
 1. 从侧栏打开“技能治理”，查看格式、来源、重复内容、长文档和基线差异。
@@ -67,6 +69,7 @@ Vercel 锁文件导入/冻结恢复、插件整包生命周期、语义重叠分
 2026-11-09，在 Windows 本机完成：
 
 - `cargo test --manifest-path src-tauri/Cargo.toml --lib core::governance::tests -- --test-threads=1`：14 项通过，包括 Windows Junction、硬链接、损坏/未来版本锁文件、内容增删改、来源脱敏和确认过期。
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib commands::projects::tests::codex_discovery -- --test-threads=1`：2 项通过，覆盖新版/历史 Codex 项目目录及 Junction 别名去重。
 - `cargo build --manifest-path src-tauri/Cargo.toml --bins`：桌面程序和 CLI 编译通过。
 - `node scripts/governance-smoke.mjs`：真实 CLI 在隔离目录中验证只读检查、退出码、显式确认、建立/更新基线、变化检测和未知格式保护，全部通过。
 - `npm run build`：类型检查与生产构建通过。构建保留已有的大包体积与 Browserslist 数据更新时间提示，不影响生成。
