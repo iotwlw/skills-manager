@@ -26,12 +26,32 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    Governance(GovernanceArgs),
     Repo(RepoArgs),
     Tools(ToolsArgs),
     Skills(SkillsArgs),
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
     Git(GitArgs),
+}
+
+#[derive(Args, Debug)]
+struct GovernanceArgs {
+    #[command(subcommand)]
+    command: GovernanceCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum GovernanceCommand {
+    /// 扫描实际文件、标准兼容性和基线差异，不写数据库。
+    Inspect,
+    /// 校验版本基线；缺失、变化或格式错误时退出 1，适用于 CI。
+    Verify,
+    /// 将当前内容确认为新的基线；先使用 inspect 查看差异。
+    Lock {
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -441,15 +461,45 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         central_repo::set_runtime_skills_dir_override(Some(skills_root.clone()));
     }
 
+    // 治理命令直接读取文件，避免初始化数据库或自动重建元数据。
+    if let Commands::Governance(args) = &cli.command {
+        return run_governance(args, cli.json);
+    }
     let store = app_state::initialize_cli_store()?;
 
     match cli.command {
+        Commands::Governance(_) => unreachable!(),
         Commands::Repo(args) => run_repo(args, &store, cli.json),
         Commands::Tools(args) => run_tools(args, &store, cli.json),
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
         Commands::Git(args) => run_git(args, cli.skills_root.is_some(), cli.json),
     }
+}
+
+fn run_governance(args: &GovernanceArgs, json: bool) -> anyhow::Result<()> {
+    use app_lib::core::governance;
+    let root = central_repo::skills_dir();
+    let report = match args.command {
+        GovernanceCommand::Inspect => governance::inspect_repository(&root)?,
+        GovernanceCommand::Verify => governance::verify_lock(&root)?,
+        GovernanceCommand::Lock { yes } => {
+            if !yes {
+                bail!("请先运行 governance inspect 查看差异，再使用 governance lock --yes 确认当前内容为基线");
+            }
+            let _guard = RepoLock::acquire_foreground("建立技能版本基线")?;
+            governance::create_lock(&root)?
+        }
+    };
+    let failed = report.issues.iter().any(|issue| issue.severity == "error")
+        || report.skills.iter().any(|skill| skill.issues.iter().any(|issue| issue.severity == "error"))
+        || (matches!(args.command, GovernanceCommand::Verify)
+            && (!report.lock_exists || report.skills.iter().any(|skill| skill.state != "locked")));
+    print_json(&report, json);
+    if failed {
+        bail!("技能治理检查未通过；请查看报告中的问题与差异");
+    }
+    Ok(())
 }
 
 // ── repo ──────────────────────────────────────────────────────────────────

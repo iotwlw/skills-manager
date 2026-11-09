@@ -910,6 +910,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::governance::inspect_skill_governance,
+            commands::governance::verify_skill_governance_lock,
+            commands::governance::create_skill_governance_lock,
             // Tools
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,

@@ -38,6 +38,7 @@ CLAUDE.md
 .loop-log
 
 # Skill Forklift 本机 context 与离线报告
+.codegraph/
 skill-forklift.context.json
 skill-forklift-report.html
 

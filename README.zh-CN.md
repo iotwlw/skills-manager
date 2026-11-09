@@ -57,6 +57,12 @@
 
 ## 核心概念
 
+### 技能治理与版本基线
+
+侧栏的 **技能治理** 可检查实际文件中的格式问题、重复内容、来源和版本差异。首次检查后创建本地基线；安装或更新后先查看变化，再明确确认更新基线。CLI 提供 `governance inspect`、`governance lock --yes` 和 `governance verify`，可用于项目检查与 CI。
+
+基线文件为 `skills-manager.lock.json`，不会覆盖 Vercel 的 `skills-lock.json`；它验证本地受检查文件内容，不下载或恢复技能，也不代表执行安全认证。详见 [升级说明](docs/skill-governance-upgrade.md) 和 [最新方案调研](docs/skill-management-research-2026-11-09.md)。
+
 - **Preset 是可复用的 Skills 分组** — Preset 是一组命名的 Skills 集合。在任意工作区激活 Preset，即可将其所有 Skills 添加到选定 Agent；停用则反向移除。应用 Preset 是一次性复制，不是实时同步。
 - **全局工作区管理每个 Agent 的全局 Skills** — 每个已安装 Agent 都有自己的全局 Skills 目录（如 Claude Code 对应 `~/.claude/skills/`）。每个 Agent 页面会列出该目录里的所有内容（包括不是通过 Skills Manager 安装的 Skills），可以添加、移除或纳入管理；「全部 Agents」总览则跨 Agent 统一管理。
 - **项目工作区是项目专属 Skills 集合** — 项目工作区管理某个项目里的本地 Skills（如 `<project>/.claude/skills/`），只对该项目生效。

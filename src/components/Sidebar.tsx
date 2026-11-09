@@ -15,6 +15,7 @@ import {
   Link2,
   ChevronDown,
   ChevronRight,
+  FileCheck2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -166,6 +167,7 @@ export function Sidebar() {
   const NAV_ITEMS = [
     { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
     { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
+    { name: "技能治理", path: "/governance", icon: FileCheck2 },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
   ];
 

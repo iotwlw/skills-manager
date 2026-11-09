@@ -739,7 +739,7 @@ fn ensure_no_interrupted_git_operation(skills_dir: &Path) -> Result<()> {
 
 fn ensure_gitignore(skills_dir: &Path) -> Result<()> {
     let gitignore = skills_dir.join(".gitignore");
-    let required = [".DS_Store", "Thumbs.db", "*.tmp", ".skills-manager.lock"];
+    let required = [".DS_Store", "Thumbs.db", "*.tmp", ".skills-manager.lock", ".skills-manager-governance.guard"];
     let mut lines: Vec<String> = if gitignore.exists() {
         std::fs::read_to_string(&gitignore)?
             .lines()
